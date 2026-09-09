@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: chs-portal-api
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run start --workspace=apps/api
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: SESSION_TTL_HOURS
+        value: "12"
+      - key: ALLOW_PASSWORD_LOGIN
+        value: "true"
+      - key: WEB_ORIGIN
+        value: https://chs-portal-web.onrender.com
+      - key: PORTAL_BASE_URL
+        value: https://chs-portal-web.onrender.com
+      - key: STORAGE_DRIVER
+        value: local
+      - key: STORAGE_LOCAL_DIR
+        value: ../../storage
+      - key: STORAGE_SIGNED_URL_TTL_MINUTES
+        value: "10"
+
+  - type: web
+    name: chs-portal-web
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build --workspace=apps/web
+    startCommand: npm run start --workspace=apps/web
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_API_URL
+        value: https://chs-portal-api.onrender.com

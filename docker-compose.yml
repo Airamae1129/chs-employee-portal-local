@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: chs-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chs
+      POSTGRES_PASSWORD: chs_dev_password
+      POSTGRES_DB: chs_portal
+    ports:
+      - "5432:5432"
+    volumes:
+      - chs_pg_data:/var/lib/postgresql/data
+
+  adminer:
+    image: adminer:latest
+    container_name: chs-adminer
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    depends_on:
+      - postgres
+
+volumes:
+  chs_pg_data:

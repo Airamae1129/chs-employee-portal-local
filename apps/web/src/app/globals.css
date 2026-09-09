@@ -1,0 +1,124 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * This app is a light-themed UI only. Without this, native controls
+ * (<select> dropdown popups, <input type="date/time"> pickers) follow
+ * the OS/browser dark-mode setting regardless of our own CSS — on a
+ * dark-mode system that renders dark-on-dark, unreadable text in
+ * dropdowns and pickers even though every element we style ourselves
+ * looks fine. Forcing light here fixes those native popups everywhere
+ * at once.
+ */
+html {
+  color-scheme: light;
+}
+
+html,
+body {
+  background-color: #f4f3f1;
+  color: #1a1512;
+}
+
+/* ---------- Modernized native form controls (selects, date/time/month pickers) ---------- */
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%23D99A3D'%3E%3Cpath fill-rule='evenodd' d='M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z' clip-rule='evenodd'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.65rem center;
+  background-size: 1.1em;
+  padding-right: 2.2rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+select:hover {
+  border-color: #d99a3d;
+}
+
+input[type="date"],
+input[type="month"],
+input[type="time"],
+input[type="datetime-local"] {
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+input[type="date"]:hover,
+input[type="month"]:hover,
+input[type="time"]:hover,
+input[type="datetime-local"]:hover {
+  border-color: #d99a3d;
+}
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="month"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  border-radius: 0.375rem;
+  padding: 0.2rem;
+  transition: background-color 0.15s ease;
+}
+input[type="date"]::-webkit-calendar-picker-indicator:hover,
+input[type="month"]::-webkit-calendar-picker-indicator:hover,
+input[type="time"]::-webkit-calendar-picker-indicator:hover,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
+  background-color: #f5e6c8;
+}
+
+input,
+select,
+textarea,
+button {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease, opacity 0.15s ease,
+    transform 0.15s ease;
+}
+
+/* ---------- Motion: page content, cards, and modals animate in ---------- */
+
+@keyframes chs-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes chs-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes chs-panel-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+main {
+  animation: chs-fade-up 0.25s ease-out;
+}
+
+/* Every custom modal in the app shares this exact overlay signature. */
+.fixed.inset-0.z-30.bg-black\/30 {
+  animation: chs-overlay-in 0.15s ease-out;
+}
+.fixed.inset-0.z-30.bg-black\/30 > * {
+  animation: chs-panel-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Cards lift slightly on hover for a more tactile feel. */
+.shadow-card {
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}

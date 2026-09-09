@@ -17,13 +17,14 @@ interface StaffUser {
   jobTitle?: string;
   salary?: string | null;
   salaryCurrency?: string | null;
+  managerId?: string | null;
   manager?: { name: string } | null;
 }
 
 const CURRENCY_SYMBOL: Record<string, string> = { EUR: "€", PHP: "₱" };
 
 function emptyForm() {
-  return { name: "", email: "", role: "EMPLOYEE" as StaffUser["role"], country: "IRELAND" as StaffUser["country"], jobTitle: "", salary: "", tempPassword: "" };
+  return { name: "", email: "", role: "EMPLOYEE" as StaffUser["role"], country: "IRELAND" as StaffUser["country"], jobTitle: "", salary: "", managerId: "", tempPassword: "" };
 }
 
 export default function AdminUsersPage() {
@@ -50,6 +51,7 @@ export default function AdminUsersPage() {
           country: form.country,
           jobTitle: form.jobTitle || undefined,
           salary: form.salary ? Number(form.salary) : undefined,
+          managerId: form.managerId || undefined,
           temporaryPassword: form.tempPassword,
         }),
       });
@@ -71,6 +73,7 @@ export default function AdminUsersPage() {
       country: u.country,
       jobTitle: u.jobTitle ?? "",
       salary: u.salary ?? "",
+      managerId: u.managerId ?? "",
       tempPassword: "",
     });
   }
@@ -87,6 +90,7 @@ export default function AdminUsersPage() {
           country: form.country,
           jobTitle: form.jobTitle || undefined,
           salary: form.salary ? Number(form.salary) : undefined,
+          managerId: form.managerId || undefined,
         }),
       });
       setEditing(null);
@@ -158,6 +162,25 @@ export default function AdminUsersPage() {
           className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal"
         />
       </div>
+      {form.role !== "ADMIN" && (
+        <div>
+          <label className="mb-1 block text-sm font-medium text-chs-charcoal">Manager</label>
+          <select
+            value={form.managerId}
+            onChange={(e) => setForm({ ...form, managerId: e.target.value })}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal"
+          >
+            <option value="">— No manager —</option>
+            {users
+              .filter((u) => (u.role === "MANAGER" || u.role === "ADMIN") && u.id !== editing?.id)
+              .map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name} ({u.role === "ADMIN" ? "Admin" : "Manager"})
+                </option>
+              ))}
+          </select>
+        </div>
+      )}
       {!editing && (
         <div className="md:col-span-2">
           <label className="mb-1 block text-sm font-medium text-chs-charcoal">Temporary password</label>

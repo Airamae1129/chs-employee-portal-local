@@ -1,105 +1,103 @@
 /**
- * Seed script — creates one Admin, two Managers, and several Employees
- * across both Ireland and the Philippines, plus a year of public
- * holidays for each country, a couple of sample policies, and two
- * client workspaces. Passwords below are for local/dev password-login
- * only (ALLOW_PASSWORD_LOGIN=true) and stand in for Entra ID SSO until
- * a tenant is wired up — see .env.example.
+ * Seed script — wipes every existing staff account (and all data that
+ * depends on them: time entries, HR requests, payslips, etc.) and
+ * replaces the roster with exactly three accounts: one Admin, one
+ * Manager, one Employee. Also (re)seeds a year of public holidays for
+ * both countries, sample policies, and client workspaces. Passwords
+ * below are for local/dev password-login only (ALLOW_PASSWORD_LOGIN=
+ * true) and stand in for Entra ID SSO until a tenant is wired up — see
+ * .env.example.
  *
  * Run with: npm run db:seed (from repo root) after db:migrate.
+ * Safe to re-run — it always starts from a clean slate for staff data.
  */
 import { db } from "../src/index";
 import bcrypt from "bcryptjs";
 
 const DEV_PASSWORD = "ChsDev!2026"; // same for every seeded user, dev only
 
-async function upsertUser(input: {
-  name: string;
-  email: string;
-  role: "EMPLOYEE" | "MANAGER" | "ADMIN";
-  country: "IRELAND" | "PHILIPPINES";
-  jobTitle: string;
-  managerId?: string | null;
-  passwordHash: string;
-}) {
-  const existing = await db.selectFrom("User").selectAll().where("email", "=", input.email).executeTakeFirst();
-  if (existing) return existing;
-  return db
-    .insertInto("User")
-    .values({
-      name: input.name,
-      email: input.email,
-      role: input.role,
-      country: input.country,
-      jobTitle: input.jobTitle,
-      managerId: input.managerId ?? null,
-      passwordHash: input.passwordHash,
-    })
-    .returningAll()
-    .executeTakeFirstOrThrow();
-}
-
 async function main() {
   console.log("Seeding CHS Employee Portal database...");
+
+  // Wipe every table that references User (children first), then Users
+  // themselves, so the roster below always starts from a clean slate.
+  await db.deleteFrom("Notification").execute();
+  await db.deleteFrom("AuditLog").execute();
+  await db.deleteFrom("PolicyAcknowledgement").execute();
+  await db.deleteFrom("WorkspaceAccessRequest").execute();
+  await db.deleteFrom("ClientWorkspaceItem").execute();
+  await db.deleteFrom("ResourceAllocation").execute();
+  await db.deleteFrom("PayslipIreland").execute();
+  await db.deleteFrom("GeneratedPayslip").execute();
+  await db.deleteFrom("SalaryConfig").execute();
+  await db.deleteFrom("HRRequest").execute();
+  await db.deleteFrom("CalendarEntry").execute();
+  await db.deleteFrom("TimeEvent").execute();
+  await db.deleteFrom("Announcement").execute();
+  await db.deleteFrom("User").execute();
+
   const passwordHash = await bcrypt.hash(DEV_PASSWORD, 10);
 
-  const admin = await upsertUser({
-    name: "Aoife Byrne",
+  async function createUser(input: {
+    name: string;
+    email: string;
+    role: "EMPLOYEE" | "MANAGER" | "ADMIN";
+    country: "IRELAND" | "PHILIPPINES";
+    jobTitle: string;
+    managerId?: string | null;
+  }) {
+    return db
+      .insertInto("User")
+      .values({
+        name: input.name,
+        email: input.email.toLowerCase(),
+        role: input.role,
+        country: input.country,
+        jobTitle: input.jobTitle,
+        managerId: input.managerId ?? null,
+        passwordHash,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+  }
+
+  const admin = await createUser({
+    name: "Admin",
     email: "admin@cyberhealth.ie",
     role: "ADMIN",
     country: "IRELAND",
-    jobTitle: "Head of People Operations",
-    passwordHash,
+    jobTitle: "Administrator",
   });
 
-  const managerIE = await upsertUser({
-    name: "Cian Murphy",
-    email: "manager.ie@cyberhealth.ie",
+  const manager = await createUser({
+    name: "Manager",
+    email: "manager@cyberhealth.ie",
     role: "MANAGER",
     country: "IRELAND",
-    jobTitle: "Engineering Manager",
+    jobTitle: "Manager",
     managerId: admin.id,
-    passwordHash,
   });
 
-  const managerPH = await upsertUser({
-    name: "Mika Santos",
-    email: "manager.ph@cyberhealth.ie",
-    role: "MANAGER",
-    country: "PHILIPPINES",
-    jobTitle: "Delivery Manager",
-    managerId: admin.id,
-    passwordHash,
+  const employee = await createUser({
+    name: "Employee",
+    email: "employee@cyberhealth.ie",
+    role: "EMPLOYEE",
+    country: "IRELAND",
+    jobTitle: "Employee",
+    managerId: manager.id,
   });
 
-  const employeeSeeds = [
-    { name: "Aira Delacruz", email: "aira@cyberhealth.ie", country: "PHILIPPINES" as const, managerId: managerPH.id, jobTitle: "Content Editor" },
-    { name: "Liam O'Connor", email: "liam@cyberhealth.ie", country: "IRELAND" as const, managerId: managerIE.id, jobTitle: "Security Analyst" },
-    { name: "Grace Fitzgerald", email: "grace@cyberhealth.ie", country: "IRELAND" as const, managerId: managerIE.id, jobTitle: "Support Engineer" },
-    { name: "Jomari Reyes", email: "jomari@cyberhealth.ie", country: "PHILIPPINES" as const, managerId: managerPH.id, jobTitle: "QA Engineer" },
-  ];
-
-  const employees = [];
-  for (const e of employeeSeeds) {
-    employees.push(await upsertUser({ ...e, role: "EMPLOYEE", passwordHash }));
-  }
-
-  for (const emp of employees.filter((e) => e.country === "PHILIPPINES")) {
-    const existing = await db.selectFrom("SalaryConfig").selectAll().where("userId", "=", emp.id).executeTakeFirst();
-    if (!existing) {
-      await db
-        .insertInto("SalaryConfig")
-        .values({
-          userId: emp.id,
-          salaryType: "MONTHLY",
-          baseRate: "45000",
-          allowances: "2000",
-          standardWorkingDays: 22,
-          currency: "PHP",
-        })
-        .execute();
-    }
-  }
+  await db
+    .insertInto("SalaryConfig")
+    .values({
+      userId: employee.id,
+      salaryType: "MONTHLY",
+      baseRate: "50000",
+      allowances: "0",
+      standardWorkingDays: 22,
+      currency: "EUR",
+    })
+    .execute();
 
   const irelandHolidays = [
     { date: "2026-01-01", name: "New Year's Day", type: "PUBLIC_HOLIDAY" as const },
@@ -127,27 +125,12 @@ async function main() {
     { date: "2026-12-30", name: "Rizal Day", type: "REGULAR_HOLIDAY" as const },
   ];
 
+  await db.deleteFrom("Holiday").where("year", "=", 2026).execute();
   for (const h of irelandHolidays) {
-    const existing = await db
-      .selectFrom("Holiday")
-      .selectAll()
-      .where("country", "=", "IRELAND")
-      .where("date", "=", h.date)
-      .executeTakeFirst();
-    if (!existing) {
-      await db.insertInto("Holiday").values({ country: "IRELAND", date: h.date, name: h.name, type: h.type, year: 2026 }).execute();
-    }
+    await db.insertInto("Holiday").values({ country: "IRELAND", date: h.date, name: h.name, type: h.type, year: 2026 }).execute();
   }
   for (const h of phHolidays) {
-    const existing = await db
-      .selectFrom("Holiday")
-      .selectAll()
-      .where("country", "=", "PHILIPPINES")
-      .where("date", "=", h.date)
-      .executeTakeFirst();
-    if (!existing) {
-      await db.insertInto("Holiday").values({ country: "PHILIPPINES", date: h.date, name: h.name, type: h.type, year: 2026 }).execute();
-    }
+    await db.insertInto("Holiday").values({ country: "PHILIPPINES", date: h.date, name: h.name, type: h.type, year: 2026 }).execute();
   }
 
   const policies = [
@@ -174,8 +157,8 @@ async function main() {
   console.log("Seeded accounts (dev password login, all use the same password):");
   console.log(`  password: ${DEV_PASSWORD}`);
   console.log(`  admin:    admin@cyberhealth.ie`);
-  console.log(`  manager:  manager.ie@cyberhealth.ie / manager.ph@cyberhealth.ie`);
-  console.log(`  employee: aira@cyberhealth.ie / liam@cyberhealth.ie / grace@cyberhealth.ie / jomari@cyberhealth.ie`);
+  console.log(`  manager:  manager@cyberhealth.ie`);
+  console.log(`  employee: employee@cyberhealth.ie`);
   console.log("----------------------------------------------------");
 }
 

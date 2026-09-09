@@ -3,7 +3,7 @@ services:
     name: chs-portal-api
     runtime: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm install --include=dev
     startCommand: npm run start --workspace=apps/api
     envVars:
       - key: NODE_ENV
@@ -31,7 +31,12 @@ services:
     name: chs-portal-web
     runtime: node
     plan: free
-    buildCommand: npm install && npm run build --workspace=apps/web
+    # --include=dev: Next.js needs the "typescript" package (a
+    # devDependency) present at build time to read the "@/*" path
+    # aliases from tsconfig.json — without it every "@/..." import
+    # fails to resolve. Render sets NODE_ENV=production before install,
+    # which makes plain "npm install" skip devDependencies otherwise.
+    buildCommand: npm install --include=dev && npm run build --workspace=apps/web
     startCommand: npm run start --workspace=apps/web
     envVars:
       - key: NODE_ENV

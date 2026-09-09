@@ -84,7 +84,14 @@ authRouter.post("/login", async (req, res) => {
   });
 });
 
-const setPasswordSchema = z.object({ newPassword: z.string().min(8) });
+// 8-16 chars, at least one uppercase, one lowercase, one number, one symbol.
+const STRONG_PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,16}$/;
+const STRONG_PASSWORD_MESSAGE =
+  "Password must be 8-16 characters and include an uppercase letter, a lowercase letter, a number, and a symbol.";
+
+const setPasswordSchema = z.object({
+  newPassword: z.string().regex(STRONG_PASSWORD_REGEX, STRONG_PASSWORD_MESSAGE),
+});
 
 /**
  * POST /auth/set-password — first-login forced reset (Staff Accounts:
@@ -95,7 +102,7 @@ const setPasswordSchema = z.object({ newPassword: z.string().min(8) });
  */
 authRouter.post("/set-password", requireAuth, async (req, res) => {
   const parsed = setPasswordSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: "newPassword (min 8 chars) is required" });
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? STRONG_PASSWORD_MESSAGE });
 
   const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
   await db

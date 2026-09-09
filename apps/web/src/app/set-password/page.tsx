@@ -7,6 +7,11 @@ import { apiFetch, ApiError } from "@/lib/api";
 import { notifySuccess, notifyError } from "@/lib/alerts";
 import { KeyRound } from "lucide-react";
 
+// 8-16 chars, at least one uppercase, one lowercase, one number, one symbol.
+const STRONG_PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,16}$/;
+const STRONG_PASSWORD_MESSAGE =
+  "Password must be 8-16 characters and include an uppercase letter, a lowercase letter, a number, and a symbol.";
+
 /**
  * Forced first-login password reset (Staff Accounts: "user input email
  * and temporary password, then next page they need to Create a New
@@ -24,8 +29,8 @@ export default function SetPasswordPage() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    if (newPassword.length < 8) {
-      setError("Password must be at least 8 characters.");
+    if (!STRONG_PASSWORD_REGEX.test(newPassword)) {
+      setError(STRONG_PASSWORD_MESSAGE);
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -67,8 +72,11 @@ export default function SetPasswordPage() {
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-chs-charcoal outline-none focus:border-chs-gold focus:ring-1 focus:ring-chs-gold"
-              placeholder="At least 8 characters"
+              placeholder="e.g. Cyber#Health26"
             />
+            <p className="mt-1.5 text-xs text-gray-400">
+              8-16 characters, with an uppercase letter, a lowercase letter, a number, and a symbol.
+            </p>
           </div>
           <div>
             <label className="mb-1.5 block text-sm font-medium text-chs-charcoal">Confirm new password</label>

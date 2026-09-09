@@ -14,7 +14,10 @@
 import { db } from "../src/index";
 import bcrypt from "bcryptjs";
 
-const DEV_PASSWORD = "ChsDev!2026"; // same for every seeded user, dev only
+// Temporary password only — every seeded account has mustResetPassword=true,
+// so on first login they're redirected to /set-password and must choose
+// their own permanent password before reaching the dashboard.
+const DEV_PASSWORD = "ChsDev!2026";
 
 async function main() {
   console.log("Seeding CHS Employee Portal database...");
@@ -56,6 +59,7 @@ async function main() {
         jobTitle: input.jobTitle,
         managerId: input.managerId ?? null,
         passwordHash,
+        mustResetPassword: true,
       })
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -154,8 +158,8 @@ async function main() {
 
   console.log("Seed complete.");
   console.log("----------------------------------------------------");
-  console.log("Seeded accounts (dev password login, all use the same password):");
-  console.log(`  password: ${DEV_PASSWORD}`);
+  console.log("Seeded accounts — TEMPORARY password, must be changed on first login:");
+  console.log(`  temporary password: ${DEV_PASSWORD}`);
   console.log(`  admin:    admin@cyberhealth.ie`);
   console.log(`  manager:  manager@cyberhealth.ie`);
   console.log(`  employee: employee@cyberhealth.ie`);

@@ -1,4 +1,7 @@
 import express from "express";
+// Express 4 doesn't catch rejected promises in async handlers, so one failed
+// DB call would crash the whole process. This routes them to the error handler.
+import "express-async-errors";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import { env } from "./env";

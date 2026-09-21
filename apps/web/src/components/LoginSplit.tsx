@@ -55,8 +55,7 @@ export function LoginSplit({
             <span className="text-chs-gold">in one place.</span>
           </h1>
           <p className="mt-5 text-sm leading-relaxed text-gray-300">
-            Sign in with your CHS staff account — Employee, Manager, or Admin. You&apos;ll land in the
-            right portal automatically.
+            Sign in with your CHS staff account to access the Cyberhealth Employee Portal.
           </p>
         </div>
 

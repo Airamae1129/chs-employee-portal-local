@@ -59,13 +59,19 @@ authRouter.post("/login", async (req, res) => {
   const { email, password } = parsed.data;
 
   const user = await db.selectFrom("User").selectAll().where("email", "=", email.toLowerCase()).executeTakeFirst();
-  if (!user || !user.passwordHash || user.status !== "ACTIVE") {
+  if (!user || !user.passwordHash) {
     return res.status(401).json({ error: "Invalid email or password" });
   }
 
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) {
     return res.status(401).json({ error: "Invalid email or password" });
+  }
+
+  // Only revealed after the correct password, so it can't be used to find out
+  // which email addresses belong to deactivated accounts.
+  if (user.status !== "ACTIVE") {
+    return res.status(403).json({ error: "Unable to access your account. Please contact your administrator." });
   }
 
   setSessionCookie(res, user);

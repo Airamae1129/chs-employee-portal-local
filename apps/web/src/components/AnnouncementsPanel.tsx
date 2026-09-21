@@ -16,7 +16,8 @@ interface Author {
 
 interface AnnouncementItem {
   id: string;
-  authorId: string;
+  authorId: string | null;
+  kind?: string | null;
   message: string;
   createdAt: string;
   author: Author | null;
@@ -220,7 +221,7 @@ function Composer({
 function Meta({ item }: { item: AnnouncementItem }) {
   return (
     <div className="mt-1 text-xs text-gray-400">
-      {item.author?.name ?? "Unknown"} · {new Date(item.createdAt).toLocaleString()}
+      {item.author?.name ?? "CHS Portal (automatic)"} · {new Date(item.createdAt).toLocaleString()}
     </div>
   );
 }
@@ -287,7 +288,7 @@ export function AnnouncementsPanel({ user }: { user: CurrentUser }) {
       <div className="space-y-3">
         {items.length === 0 && <div className="text-sm text-gray-400">No announcements yet.</div>}
         {items.map((a) => (
-          <div key={a.id} className="rounded-xl bg-chs-bg px-4 py-3">
+          <div key={a.id} className={`rounded-xl px-4 py-3 ${a.kind ? "border border-chs-gold/40 bg-chs-gold/10" : "bg-chs-bg"}`}>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="break-words text-sm text-chs-charcoal">{renderWithMentions(a.message, names)}</div>
@@ -322,7 +323,7 @@ export function AnnouncementsPanel({ user }: { user: CurrentUser }) {
               {replyingTo === a.id ? (
                 <div>
                   <div className="mb-1 flex items-center justify-between text-xs text-gray-400">
-                    <span>Replying to {a.author?.name ?? "this post"}</span>
+                    <span>Replying to {a.author?.name ?? "this announcement"}</span>
                     <button onClick={() => setReplyingTo(null)} aria-label="Cancel reply" className="hover:text-red-500">
                       <X size={14} />
                     </button>

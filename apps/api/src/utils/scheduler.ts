@@ -1,5 +1,6 @@
 import { db } from "../db";
 import { IE_TIME_ZONE, isoDateInZone, nextMidnightInZone } from "./time";
+import { runAutoAnnouncementSweep } from "./autoAnnouncements";
 
 /**
  * Manager Timekeeping revision: Managers no longer edit employees' time
@@ -72,7 +73,10 @@ async function runMissingClockOutNotificationSweep() {
 }
 
 export function startScheduler() {
+  const autoSweep = () => runAutoAnnouncementSweep().catch((err) => console.error("[auto-announcements] sweep failed:", err));
+  autoSweep();
   setInterval(() => {
+    autoSweep();
     const now = new Date();
     if (!isSaturdayMidnightInIreland(now)) return;
     const weekKey = isoDateInZone(now, IE_TIME_ZONE);

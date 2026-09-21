@@ -128,9 +128,13 @@ export interface ClientWorkspaceItemTable {
 
 export interface AnnouncementTable {
   id: Generated<string>;
-  authorId: string;
+  authorId: string | null;
   message: string;
   parentId: string | null;
+  kind: string | null;
+  refKey: string | null;
+  activeDate: DateOnly | null;
+  activeZone: string | null;
   createdAt: Generated<Timestamp>;
 }
 

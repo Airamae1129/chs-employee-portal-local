@@ -174,15 +174,15 @@ export default function TimekeepingPage() {
     setClocking(true);
     try {
       await apiFetch("/time/clock", { method: "POST", body: JSON.stringify({ eventType: type }) });
-      refreshRecentEvents();
-      refreshCalendar();
-      if (manageUserId === user?.id) refreshManageEvents(manageUserId);
-      notifySuccess(type === "IN" ? "Clocked in" : "Clocked out", new Date().toLocaleTimeString());
+      // Show the confirmation, then reload the whole page once it closes so
+      // every panel (status, calendar, entries, notifications) is fresh.
+      await notifySuccess(type === "IN" ? "Clocked in" : "Clocked out", new Date().toLocaleTimeString());
+      window.location.reload();
+      return;
     } catch (e) {
       notifyError("Something went wrong", e instanceof Error ? e.message : undefined);
-    } finally {
-      setClocking(false);
     }
+    setClocking(false);
   }
 
   function openDay(dateStr: string) {

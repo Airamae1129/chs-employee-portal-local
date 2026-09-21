@@ -55,7 +55,7 @@ export default function SetPasswordPage() {
     <div className="flex min-h-screen w-full items-center justify-center bg-chs-bg px-4 py-10">
       <div className="w-full max-w-sm rounded-2xl bg-white p-8 shadow-card">
         <div className="mb-2 flex items-center gap-3">
-          <Image src="/logo.png" alt="Cyberhealth" width={36} height={36} className="rounded" />
+          <Image src="/logo-signin.png" alt="Cyberhealth" width={40} height={40} />
           <div className="text-lg font-bold text-chs-charcoal">Cyberhealth</div>
         </div>
         <h2 className="mt-4 text-2xl font-bold text-chs-charcoal">Set a new password</h2>

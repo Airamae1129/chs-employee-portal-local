@@ -39,7 +39,7 @@ export function LoginSplit({
           }}
         />
         <div className="relative z-10 flex items-center gap-3">
-          <Image src="/logo.png" alt="Cyberhealth" width={44} height={44} className="rounded" />
+          <div className="rounded-lg bg-white p-1"><Image src="/logo-signin.png" alt="Cyberhealth" width={44} height={44} /></div>
           <div>
             <div className="text-xl font-bold">Cyberhealth</div>
             <div className="text-xs font-semibold tracking-widest text-chs-gold">

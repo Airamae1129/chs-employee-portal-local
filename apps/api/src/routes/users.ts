@@ -14,7 +14,7 @@ usersRouter.use(requireAuth, allow("ADMIN"));
 usersRouter.get("/", async (_req, res) => {
   const users = await db
     .selectFrom("User")
-    .select(["id", "name", "email", "role", "country", "status", "jobTitle", "managerId", "createdAt"])
+    .select(["id", "name", "email", "role", "country", "status", "jobTitle", "managerId", "birthday", "createdAt"])
     .orderBy("name", "asc")
     .execute();
 
@@ -56,6 +56,7 @@ const createUserSchema = z.object({
   country: z.enum(["IRELAND", "PHILIPPINES"]),
   jobTitle: z.string().optional(),
   managerId: z.string().optional(),
+  birthday: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   temporaryPassword: z.string().min(8),
   salary: z.coerce.number().positive().optional(),
 });
@@ -74,6 +75,7 @@ usersRouter.post("/", async (req, res) => {
       country: parsed.data.country,
       jobTitle: parsed.data.jobTitle ?? null,
       managerId: parsed.data.managerId ?? null,
+      birthday: parsed.data.birthday ?? null,
       passwordHash,
       mustResetPassword: true,
     })

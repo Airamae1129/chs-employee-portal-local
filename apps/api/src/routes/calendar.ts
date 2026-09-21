@@ -19,6 +19,28 @@ function isoDate(d: Date): string {
 }
 
 /**
+ * GET /calendar/birthdays — every active employee's birthday (month/day
+ * only, the birth year stays private) for the shared calendar note on
+ * Timekeeping & Calendar. Visible to all roles.
+ */
+calendarRouter.get("/birthdays", async (_req, res) => {
+  const users = await db
+    .selectFrom("User")
+    .select(["id", "name", "birthday"])
+    .where("status", "=", "ACTIVE")
+    .where("birthday", "is not", null)
+    .execute();
+  res.json({
+    birthdays: users.map((u) => ({
+      id: u.id,
+      name: u.name,
+      month: Number(u.birthday!.slice(5, 7)),
+      day: Number(u.birthday!.slice(8, 10)),
+    })),
+  });
+});
+
+/**
  * GET /calendar/me?month=YYYY-MM — merged view per Section 5/6: the
  * user's own TimeEvents rolled up per day, approved Leave, their
  * country's Holidays, and their own TaskNotes.

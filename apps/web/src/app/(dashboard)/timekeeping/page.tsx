@@ -37,6 +37,7 @@ export default function TimekeepingPage() {
     return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
   });
   const [calendarData, setCalendarData] = useState<Record<string, DayCellData>>({});
+  const [birthdays, setBirthdays] = useState<{ id: string; name: string; month: number; day: number }[]>([]);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [dayNotes, setDayNotes] = useState<{ id: string; title: string }[]>([]);
   const [noteTitle, setNoteTitle] = useState("");
@@ -59,6 +60,23 @@ export default function TimekeepingPage() {
   // --- Personal notifications (everyone) + team missing-clock-out log (Manager/Admin) ---
   const [myNotifications, setMyNotifications] = useState<Notification[]>([]);
   const [teamNotifications, setTeamNotifications] = useState<Notification[]>([]);
+
+  // Everyone's birthdays (all roles see all birthdays) merged into the
+  // visible month's cells, alongside the personal calendar data.
+  const cellData = useMemo(() => {
+    const year = monthDate.getUTCFullYear();
+    const month = monthDate.getUTCMonth() + 1;
+    const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    const merged: Record<string, DayCellData> = { ...calendarData };
+    for (const b of birthdays) {
+      // Feb 29 birthdays are shown on Feb 28 in non-leap years.
+      const day = b.month === 2 && b.day === 29 && !isLeap ? 28 : b.day;
+      if (b.month !== month) continue;
+      const key = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      merged[key] = { ...merged[key], birthdays: [...(merged[key]?.birthdays ?? []), { id: b.id, name: b.name }] };
+    }
+    return merged;
+  }, [calendarData, birthdays, monthDate]);
 
   const lastEvent = events[0];
   const isClockedIn = lastEvent?.eventType === "IN";
@@ -133,6 +151,9 @@ export default function TimekeepingPage() {
   useEffect(() => {
     refreshRecentEvents();
     apiFetch<{ notifications: Notification[] }>("/notifications/me").then(({ notifications }) => setMyNotifications(notifications));
+    apiFetch<{ birthdays: typeof birthdays }>("/calendar/birthdays")
+      .then(({ birthdays }) => setBirthdays(birthdays))
+      .catch(() => void 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -336,13 +357,13 @@ export default function TimekeepingPage() {
         <div className="lg:col-span-2">
           <CalendarGrid
             monthDate={monthDate}
-            cellData={calendarData}
+            cellData={cellData}
             onDayClick={openDay}
             onPrevMonth={() => setMonthDate(new Date(Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth() - 1, 1)))}
             onNextMonth={() => setMonthDate(new Date(Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth() + 1, 1)))}
           />
           <p className="mt-2 text-xs text-gray-400">
-            Green = hours logged · Red = Ireland holiday · Purple = Philippines holiday · Blue = approved leave · Gray
+            Green = hours logged · Red = Ireland holiday · Purple = Philippines holiday · Blue = approved leave · Pink = birthday · Gray
             = your task note. Click a date to add, edit or remove a note.
           </p>
         </div>
@@ -457,6 +478,16 @@ export default function TimekeepingPage() {
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/30 p-4">
           <Card className="w-full max-w-sm">
             <div className="text-base font-bold text-chs-charcoal">Notes — {selectedDate}</div>
+
+            {(cellData[selectedDate]?.birthdays?.length ?? 0) > 0 && (
+              <div className="mt-3 space-y-2">
+                {cellData[selectedDate]!.birthdays!.map((b) => (
+                  <div key={b.id} className="rounded-lg bg-pink-50 px-3 py-2 text-sm text-pink-700">
+                    🎂 It&apos;s {b.name}&apos;s birthday!
+                  </div>
+                ))}
+              </div>
+            )}
 
             {dayNotes.length > 0 && (
               <div className="mt-3 space-y-2">

@@ -22,6 +22,7 @@ export interface UserTable {
   country: E.Country;
   status: Generated<E.UserStatus>;
   jobTitle: string | null;
+  birthday: DateOnly | null;
   mustResetPassword: Generated<boolean>;
   createdAt: Generated<Timestamp>;
   updatedAt: Generated<Timestamp>;

@@ -5,6 +5,7 @@ export interface DayCellData {
   holidays?: { name: string; type: string; country: "IRELAND" | "PHILIPPINES" }[];
   onLeave?: boolean;
   notes?: { id: string; title: string }[];
+  birthdays?: { id: string; name: string }[];
 }
 
 // Ireland and Philippines holidays get distinct colors so a day paid
@@ -85,6 +86,11 @@ export function CalendarGrid({
                 {data?.holidays?.map((h, i) => (
                   <div key={i} className={`truncate rounded px-1 py-0.5 text-[10px] ${HOLIDAY_COLOR[h.country]}`}>
                     {h.name}
+                  </div>
+                ))}
+                {data?.birthdays?.map((b) => (
+                  <div key={b.id} className="truncate rounded bg-pink-50 px-1 py-0.5 text-[10px] text-pink-600">
+                    🎂 {b.name}
                   </div>
                 ))}
                 {data?.onLeave ? (

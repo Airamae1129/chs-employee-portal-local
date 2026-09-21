@@ -59,8 +59,15 @@ export function LoginSplit({
           </p>
         </div>
 
-        <div className="relative z-10 flex items-center gap-2 text-xs text-gray-400">
-          <span>🛡️</span> CHS staff only
+        <div className="relative z-10 flex max-w-md items-start gap-2 text-xs leading-relaxed text-gray-400">
+          <span>🛡️</span>
+          <div>
+            <div className="font-semibold text-gray-300">Authorized CHS staff only</div>
+            <div className="mt-0.5">
+              Access to this portal is restricted to Cyberhealth Services Limited staff. Sign-ins and account activity are
+              recorded for security and audit purposes.
+            </div>
+          </div>
         </div>
       </div>
 

@@ -64,8 +64,7 @@ export function LoginSplit({
           <div>
             <div className="font-semibold text-gray-300">Authorized CHS staff only</div>
             <div className="mt-0.5">
-              Access to this portal is restricted to Cyberhealth Services Limited staff. Sign-ins and account activity are
-              recorded for security and audit purposes.
+              Access to this portal is restricted to Cyberhealth Services Limited staff.
             </div>
           </div>
         </div>

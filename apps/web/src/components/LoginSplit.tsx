@@ -61,7 +61,7 @@ export function LoginSplit({
         </div>
 
         <div className="relative z-10 flex items-center gap-2 text-xs text-gray-400">
-          <span>🛡️</span> CHS staff only · sessions expire after 12 hours
+          <span>🛡️</span> CHS staff only
         </div>
       </div>
 

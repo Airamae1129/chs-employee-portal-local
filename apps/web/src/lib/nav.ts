@@ -31,7 +31,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/workspaces", label: "Client Workspaces", icon: Link2, roles: ["EMPLOYEE", "MANAGER", "ADMIN"] },
   { href: "/payslips", label: "Payslips", icon: Wallet, roles: ["EMPLOYEE", "MANAGER", "ADMIN"] },
   { href: "/team", label: "My Team", icon: Users, roles: ["MANAGER", "ADMIN"] },
-  { href: "/admin/holidays", label: "Holiday Calendars", icon: CalendarDays, roles: ["ADMIN"] },
+  { href: "/admin/holidays", label: "Holidays & Birthdays", icon: CalendarDays, roles: ["ADMIN"] },
   { href: "/admin/payroll", label: "Payroll", icon: Banknote, roles: ["ADMIN"] },
   { href: "/admin/users", label: "Staff Accounts", icon: Users, roles: ["ADMIN"] },
   { href: "/admin/audit-log", label: "Audit Log", icon: ShieldCheck, roles: ["ADMIN"] },

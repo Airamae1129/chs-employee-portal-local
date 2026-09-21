@@ -35,7 +35,7 @@ export default function AdminHolidaysPage() {
   return (
     <div>
       <PageHeader
-        title="Holiday Calendars"
+        title="Holidays & Birthdays"
         action={
           tab === "holidays" ? (
             <Button icon={<Plus size={16} />} onClick={() => setShowForm(true)}>

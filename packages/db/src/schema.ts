@@ -129,6 +129,7 @@ export interface AnnouncementTable {
   id: Generated<string>;
   authorId: string;
   message: string;
+  parentId: string | null;
   createdAt: Generated<Timestamp>;
 }
 

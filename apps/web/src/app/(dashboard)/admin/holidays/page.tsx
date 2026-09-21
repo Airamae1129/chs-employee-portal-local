@@ -227,9 +227,6 @@ function BirthdaysTab() {
 
   return (
     <Card>
-      <p className="mb-4 text-sm text-gray-500">
-        Set each employee&apos;s birthday. Everyone will see it as a 🎂 note on the Timekeeping &amp; Calendar page (month and day only).
-      </p>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead>

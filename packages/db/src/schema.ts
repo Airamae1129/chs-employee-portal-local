@@ -127,6 +127,21 @@ export interface ClientWorkspaceItemTable {
   updatedAt: Generated<Timestamp>;
 }
 
+export type TaskStatus = "ASSIGNED" | "IN_PROGRESS" | "FOR_REVIEW" | "DONE";
+
+export interface TaskTable {
+  id: Generated<string>;
+  subject: string;
+  note: string | null;
+  link: string | null;
+  assigneeId: string;
+  assignedBy: string;
+  dueDate: DateOnly;
+  status: Generated<TaskStatus>;
+  createdAt: Generated<Timestamp>;
+  updatedAt: Generated<Timestamp>;
+}
+
 export interface PolicyItemTable {
   id: Generated<string>;
   policyId: string;
@@ -254,4 +269,5 @@ export interface Database {
   Notification: NotificationTable;
   StoredFile: StoredFileTable;
   PolicyItem: PolicyItemTable;
+  Task: TaskTable;
 }

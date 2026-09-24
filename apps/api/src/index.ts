@@ -21,6 +21,7 @@ import { usersRouter } from "./routes/users";
 import { filesRouter } from "./routes/files";
 import { announcementsRouter } from "./routes/announcements";
 import { notificationsRouter } from "./routes/notifications";
+import { tasksRouter } from "./routes/tasks";
 import { startScheduler } from "./utils/scheduler";
 
 const app = express();
@@ -52,6 +53,7 @@ app.use("/users", usersRouter);
 app.use("/files", filesRouter);
 app.use("/announcements", announcementsRouter);
 app.use("/notifications", notificationsRouter);
+app.use("/tasks", tasksRouter);
 
 // Centralized error handler — keep failures as JSON, never leak stack traces.
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

@@ -6,7 +6,15 @@ export interface DayCellData {
   onLeave?: boolean;
   notes?: { id: string; title: string }[];
   birthdays?: { id: string; name: string }[];
+  tasks?: { id: string; subject: string; status: "ASSIGNED" | "IN_PROGRESS" | "FOR_REVIEW" | "DONE" }[];
 }
+
+const TASK_CHIP: Record<string, string> = {
+  ASSIGNED: "bg-indigo-50 text-indigo-600",
+  IN_PROGRESS: "bg-amber-50 text-amber-700",
+  FOR_REVIEW: "bg-cyan-50 text-cyan-700",
+  DONE: "bg-gray-100 text-gray-400 line-through",
+};
 
 // Ireland and Philippines holidays get distinct colors so a day paid
 // under either country's calendar (Payroll: Ireland holidays are
@@ -91,6 +99,11 @@ export function CalendarGrid({
                 {data?.birthdays?.map((b) => (
                   <div key={b.id} className="truncate rounded bg-pink-50 px-1 py-0.5 text-[10px] text-pink-600">
                     🎂 {b.name}
+                  </div>
+                ))}
+                {data?.tasks?.map((t) => (
+                  <div key={t.id} className={`truncate rounded px-1 py-0.5 text-[10px] ${TASK_CHIP[t.status]}`}>
+                    📌 {t.subject}
                   </div>
                 ))}
                 {data?.onLeave ? (

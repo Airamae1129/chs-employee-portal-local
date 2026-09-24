@@ -36,6 +36,7 @@ async function main() {
   await db.deleteFrom("HRRequest").execute();
   await db.deleteFrom("CalendarEntry").execute();
   await db.deleteFrom("TimeEvent").execute();
+  await db.deleteFrom("Task").execute();
   await db.deleteFrom("Announcement").execute();
   await db.updateTable("PolicyItem").set({ createdBy: null }).execute();
   await db.deleteFrom("User").execute();

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Pencil, Trash2, Plus, LogIn, LogOut, Save, BellRing } from "lucide-react";
+import { Pencil, Trash2, Plus, LogIn, LogOut, Save, BellRing, ClipboardList, ExternalLink } from "lucide-react";
 import { PageHeader, Card, Badge } from "@/components/PageHeader";
 import { Button } from "@/components/Button";
 import { LiveClocks } from "@/components/LiveClocks";
@@ -28,6 +28,37 @@ interface Notification {
   user?: { name: string } | null;
 }
 
+type TaskStatus = "ASSIGNED" | "IN_PROGRESS" | "FOR_REVIEW" | "DONE";
+interface Task {
+  id: string;
+  subject: string;
+  note: string | null;
+  link: string | null;
+  dueDate: string;
+  status: TaskStatus;
+  assigneeId: string;
+  assigneeName: string;
+  assignedByName: string;
+}
+const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
+  ASSIGNED: "Assigned",
+  IN_PROGRESS: "In Progress",
+  FOR_REVIEW: "For Review",
+  DONE: "Done",
+};
+const TASK_STATUS_TONE: Record<TaskStatus, "gray" | "gold" | "green" | "red"> = {
+  ASSIGNED: "gray",
+  IN_PROGRESS: "gold",
+  FOR_REVIEW: "gold",
+  DONE: "green",
+};
+// Assignees pick one of these; "Assigned" is only the starting state.
+const TASK_STATUS_CHOICES: TaskStatus[] = ["IN_PROGRESS", "FOR_REVIEW", "DONE"];
+
+function todayIsoDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export default function TimekeepingPage() {
   const { user } = useCurrentUser();
   const [events, setEvents] = useState<TimeEvent[]>([]);
@@ -38,6 +69,12 @@ export default function TimekeepingPage() {
   });
   const [calendarData, setCalendarData] = useState<Record<string, DayCellData>>({});
   const [birthdays, setBirthdays] = useState<{ id: string; name: string; month: number; day: number }[]>([]);
+  const [myTasks, setMyTasks] = useState<Task[]>([]);
+  const [assignedTasks, setAssignedTasks] = useState<Task[]>([]);
+  const [assignees, setAssignees] = useState<{ id: string; name: string; role: string }[]>([]);
+  const [showAssign, setShowAssign] = useState(false);
+  const [assignForm, setAssignForm] = useState({ assigneeId: "", subject: "", note: "", link: "", dueDate: todayIsoDate() });
+  const [assigning, setAssigning] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [dayNotes, setDayNotes] = useState<{ id: string; title: string }[]>([]);
   const [noteTitle, setNoteTitle] = useState("");
@@ -75,8 +112,77 @@ export default function TimekeepingPage() {
       const key = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
       merged[key] = { ...merged[key], birthdays: [...(merged[key]?.birthdays ?? []), { id: b.id, name: b.name }] };
     }
+    for (const t of myTasks) {
+      const key = t.dueDate.slice(0, 10);
+      merged[key] = { ...merged[key], tasks: [...(merged[key]?.tasks ?? []), { id: t.id, subject: t.subject, status: t.status }] };
+    }
     return merged;
-  }, [calendarData, birthdays, monthDate]);
+  }, [calendarData, birthdays, myTasks, monthDate]);
+
+  function monthKey(d: Date) {
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+  }
+
+  function refreshMyTasks() {
+    apiFetch<{ tasks: Task[] }>(`/tasks/me?month=${monthKey(monthDate)}`)
+      .then(({ tasks }) => setMyTasks(tasks))
+      .catch(() => void 0);
+  }
+
+  function refreshAssignedTasks() {
+    if (!isAdmin && !isManager) return;
+    apiFetch<{ tasks: Task[] }>("/tasks/assigned")
+      .then(({ tasks }) => setAssignedTasks(tasks))
+      .catch(() => void 0);
+  }
+
+  async function changeTaskStatus(id: string, status: TaskStatus) {
+    try {
+      await apiFetch(`/tasks/${id}/status`, { method: "PATCH", body: JSON.stringify({ status }) });
+      refreshMyTasks();
+      refreshAssignedTasks();
+      notifySuccess("Task updated", TASK_STATUS_LABEL[status]);
+    } catch (e) {
+      notifyError("Couldn't update task", e instanceof Error ? e.message : undefined);
+    }
+  }
+
+  function openAssign() {
+    setAssignForm({ assigneeId: assignees[0]?.id ?? "", subject: "", note: "", link: "", dueDate: selectedDate ?? todayIsoDate() });
+    setShowAssign(true);
+  }
+
+  async function assignTask() {
+    setAssigning(true);
+    try {
+      await apiFetch("/tasks", {
+        method: "POST",
+        body: JSON.stringify({
+          assigneeId: assignForm.assigneeId,
+          subject: assignForm.subject.trim(),
+          note: assignForm.note.trim() || undefined,
+          link: assignForm.link.trim() || undefined,
+          dueDate: assignForm.dueDate,
+        }),
+      });
+      setShowAssign(false);
+      refreshAssignedTasks();
+      refreshMyTasks();
+      notifySuccess("Task assigned", "It now shows on their calendar.");
+    } catch (e) {
+      notifyError("Couldn't assign task", e instanceof Error ? e.message : undefined);
+    } finally {
+      setAssigning(false);
+    }
+  }
+
+  async function deleteTask(id: string) {
+    const ok = await confirmAction({ title: "Delete this task?", danger: true, confirmText: "Delete" });
+    if (!ok) return;
+    await apiFetch(`/tasks/${id}`, { method: "DELETE" });
+    refreshAssignedTasks();
+    refreshMyTasks();
+  }
 
   const lastEvent = events[0];
   const isClockedIn = lastEvent?.eventType === "IN";
@@ -156,6 +262,20 @@ export default function TimekeepingPage() {
       .catch(() => void 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!isAdmin && !isManager) return;
+    refreshAssignedTasks();
+    apiFetch<{ users: { id: string; name: string; role: string }[] }>("/tasks/assignees")
+      .then(({ users }) => setAssignees(users))
+      .catch(() => void 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, isManager]);
+
+  useEffect(() => {
+    refreshMyTasks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monthDate]);
 
   useEffect(() => {
     refreshCalendar();
@@ -363,11 +483,56 @@ export default function TimekeepingPage() {
             onNextMonth={() => setMonthDate(new Date(Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth() + 1, 1)))}
           />
           <p className="mt-2 text-xs text-gray-400">
-            Green = hours logged · Red = Ireland holiday · Purple = Philippines holiday · Blue = approved leave · Pink = birthday · Gray
-            = your task note. Click a date to add, edit or remove a note.
+            Green = hours logged · Red = Ireland holiday · Purple = Philippines holiday · Blue = approved leave · Pink = birthday · Indigo/Amber/Cyan =
+            assigned task (assigned / in progress / for review) · Gray = your task note. Click a date to add, edit or remove a note.
           </p>
         </div>
       </div>
+
+      {(isAdmin || isManager) && (
+        <Card className="mt-6">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2 text-base font-bold text-chs-charcoal">
+                <ClipboardList size={18} className="text-chs-gold" />
+                Assigned tasks
+              </div>
+              <div className="text-xs text-gray-400">
+                Assign a task to {isAdmin ? "any employee" : "a member of your team"}. It shows on their calendar, and they update its progress.
+              </div>
+            </div>
+            <Button size="sm" icon={<Plus size={14} />} onClick={openAssign} disabled={assignees.length === 0}>
+              Assign task
+            </Button>
+          </div>
+          <div className="space-y-2">
+            {assignedTasks.length === 0 && <div className="text-sm text-gray-400">No tasks assigned yet.</div>}
+            {assignedTasks.map((t) => (
+              <div key={t.id} className="flex items-start justify-between gap-3 rounded-xl bg-chs-bg px-4 py-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-chs-charcoal">{t.subject}</div>
+                  <div className="text-xs text-gray-400">
+                    {t.assigneeName} · due {t.dueDate.slice(0, 10)}
+                    {isAdmin && t.assignedByName ? ` · assigned by ${t.assignedByName}` : ""}
+                  </div>
+                  {t.note && <div className="mt-1 text-xs text-gray-500">{t.note}</div>}
+                  {t.link && (
+                    <a href={t.link} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-chs-charcoal hover:underline">
+                      <ExternalLink size={11} /> Open link
+                    </a>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                  <Badge tone={TASK_STATUS_TONE[t.status]}>{TASK_STATUS_LABEL[t.status]}</Badge>
+                  <button onClick={() => deleteTask(t.id)} className="text-gray-300 hover:text-red-500" aria-label="Delete task">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       <Card className="mt-6">
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -474,6 +639,77 @@ export default function TimekeepingPage() {
         </Card>
       )}
 
+      {showAssign && (
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/30 p-4">
+          <Card className="w-full max-w-sm">
+            <div className="text-base font-bold text-chs-charcoal">Assign a task</div>
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-chs-charcoal">Employee</label>
+                <select
+                  value={assignForm.assigneeId}
+                  onChange={(e) => setAssignForm({ ...assignForm, assigneeId: e.target.value })}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal"
+                >
+                  {assignees.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-chs-charcoal">Task subject</label>
+                <input
+                  value={assignForm.subject}
+                  onChange={(e) => setAssignForm({ ...assignForm, subject: e.target.value })}
+                  maxLength={200}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-chs-charcoal">Note</label>
+                <textarea
+                  value={assignForm.note}
+                  onChange={(e) => setAssignForm({ ...assignForm, note: e.target.value })}
+                  rows={3}
+                  maxLength={2000}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-chs-charcoal">Link</label>
+                <input
+                  value={assignForm.link}
+                  onChange={(e) => setAssignForm({ ...assignForm, link: e.target.value })}
+                  placeholder="https://..."
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-chs-charcoal">Date (shows on their calendar)</label>
+                <input
+                  type="date"
+                  value={assignForm.dueDate}
+                  onChange={(e) => setAssignForm({ ...assignForm, dueDate: e.target.value })}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal"
+                />
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setShowAssign(false)}>Cancel</Button>
+              <Button
+                icon={<ClipboardList size={14} />}
+                onClick={assignTask}
+                disabled={assigning || !assignForm.assigneeId || !assignForm.subject.trim() || !assignForm.dueDate}
+              >
+                {assigning ? "Assigning..." : "Assign task"}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
       {selectedDate && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/30 p-4">
           <Card className="w-full max-w-sm">
@@ -488,6 +724,40 @@ export default function TimekeepingPage() {
                 ))}
               </div>
             )}
+
+            {myTasks
+              .filter((t) => t.dueDate.slice(0, 10) === selectedDate)
+              .map((t) => (
+                <div key={t.id} className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+                  <div className="text-sm font-semibold text-chs-charcoal">📌 {t.subject}</div>
+                  <div className="text-xs text-gray-400">Assigned by {t.assignedByName}</div>
+                  {t.note && <div className="mt-1.5 whitespace-pre-line text-sm text-gray-600">{t.note}</div>}
+                  {t.link && (
+                    <a href={t.link} target="_blank" rel="noreferrer" className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-chs-charcoal hover:underline">
+                      <ExternalLink size={12} /> Open link
+                    </a>
+                  )}
+                  <div className="mt-2.5">
+                    <label className="mb-1 block text-xs font-medium text-gray-500">Status</label>
+                    <select
+                      value={t.status}
+                      onChange={(e) => changeTaskStatus(t.id, e.target.value as TaskStatus)}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal"
+                    >
+                      {t.status === "ASSIGNED" && (
+                        <option value="ASSIGNED" disabled>
+                          Assigned — choose a status
+                        </option>
+                      )}
+                      {TASK_STATUS_CHOICES.map((s) => (
+                        <option key={s} value={s}>
+                          {TASK_STATUS_LABEL[s]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              ))}
 
             {dayNotes.length > 0 && (
               <div className="mt-3 space-y-2">

@@ -31,6 +31,7 @@ async function main() {
   await db.deleteFrom("CalendarEntry").execute();
   await db.deleteFrom("TimeEvent").execute();
   await db.deleteFrom("Announcement").execute();
+  await db.updateTable("PolicyItem").set({ createdBy: null }).execute();
   await db.deleteFrom("User").execute();
 
   const passwordHash = await bcrypt.hash(TEMP_PASSWORD, 10);

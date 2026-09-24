@@ -126,6 +126,18 @@ export interface ClientWorkspaceItemTable {
   updatedAt: Generated<Timestamp>;
 }
 
+export interface PolicyItemTable {
+  id: Generated<string>;
+  policyId: string;
+  title: string;
+  description: string | null;
+  linkUrl: string | null;
+  fileKey: string | null;
+  createdBy: string | null;
+  createdAt: Generated<Timestamp>;
+  updatedAt: Generated<Timestamp>;
+}
+
 export interface StoredFileTable {
   key: string;
   contentType: Generated<string>;
@@ -240,4 +252,5 @@ export interface Database {
   Announcement: AnnouncementTable;
   Notification: NotificationTable;
   StoredFile: StoredFileTable;
+  PolicyItem: PolicyItemTable;
 }

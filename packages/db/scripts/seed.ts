@@ -37,6 +37,7 @@ async function main() {
   await db.deleteFrom("CalendarEntry").execute();
   await db.deleteFrom("TimeEvent").execute();
   await db.deleteFrom("Announcement").execute();
+  await db.updateTable("PolicyItem").set({ createdBy: null }).execute();
   await db.deleteFrom("User").execute();
 
   const passwordHash = await bcrypt.hash(DEV_PASSWORD, 10);
@@ -138,9 +139,9 @@ async function main() {
   }
 
   const policies = [
-    { id: "seed-policy-code-of-conduct", title: "Code of Conduct", version: "v3.1", owner: "People Operations", effectiveDate: "2026-01-01", category: "HR" as const, fileKey: "policies/code-of-conduct-v3.1.pdf", acknowledgementRequired: true },
-    { id: "seed-policy-info-sec", title: "Information Security Policy", version: "v2.4", owner: "IT Security", effectiveDate: "2026-03-01", category: "IT_SECURITY" as const, fileKey: "policies/infosec-policy-v2.4.pdf", acknowledgementRequired: true },
-    { id: "seed-policy-leave", title: "Leave & Time Off Policy", version: "v1.6", owner: "People Operations", effectiveDate: "2025-11-01", category: "HR" as const, fileKey: "policies/leave-policy-v1.6.pdf", acknowledgementRequired: false },
+    { id: "seed-policy-code-of-conduct", title: "Code of Conduct", version: "v3.1", owner: "People Operations", effectiveDate: "2026-01-01", category: "HR" as const, acknowledgementRequired: true },
+    { id: "seed-policy-info-sec", title: "Information Security Policy", version: "v2.4", owner: "IT Security", effectiveDate: "2026-03-01", category: "IT_SECURITY" as const, acknowledgementRequired: true },
+    { id: "seed-policy-leave", title: "Leave & Time Off Policy", version: "v1.6", owner: "People Operations", effectiveDate: "2025-11-01", category: "HR" as const, acknowledgementRequired: false },
   ];
   for (const p of policies) {
     const existing = await db.selectFrom("Policy").selectAll().where("id", "=", p.id).executeTakeFirst();

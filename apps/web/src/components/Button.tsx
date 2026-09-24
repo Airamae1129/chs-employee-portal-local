@@ -1,10 +1,11 @@
 import { ButtonHTMLAttributes } from "react";
 
-type Variant = "primary" | "secondary" | "destructive" | "success" | "ghost";
+type Variant = "primary" | "dark" | "secondary" | "destructive" | "success" | "ghost";
 type Size = "sm" | "md";
 
 const VARIANT_CLASSES: Record<Variant, string> = {
   primary: "bg-chs-gold text-chs-charcoal hover:opacity-90 shadow-sm hover:shadow-md",
+  dark: "bg-chs-charcoal text-white hover:bg-black shadow-sm hover:shadow-md",
   secondary: "bg-gray-100 text-gray-700 hover:bg-gray-200",
   destructive: "bg-red-50 text-red-600 hover:bg-red-100",
   success: "bg-green-50 text-green-700 hover:bg-green-100",

@@ -138,8 +138,17 @@ export interface TaskTable {
   assignedBy: string;
   dueDate: DateOnly;
   status: Generated<TaskStatus>;
+  actionTaken: "APPROVED" | "RETURNED" | null;
   createdAt: Generated<Timestamp>;
   updatedAt: Generated<Timestamp>;
+}
+
+export interface TaskCommentTable {
+  id: Generated<string>;
+  taskId: string;
+  authorId: string;
+  body: string;
+  createdAt: Generated<Timestamp>;
 }
 
 export interface PolicyItemTable {
@@ -270,4 +279,5 @@ export interface Database {
   StoredFile: StoredFileTable;
   PolicyItem: PolicyItemTable;
   Task: TaskTable;
+  TaskComment: TaskCommentTable;
 }

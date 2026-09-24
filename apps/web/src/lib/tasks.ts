@@ -7,10 +7,12 @@ export interface Task {
   link: string | null;
   dueDate: string;
   status: TaskStatus;
+  actionTaken: "APPROVED" | "RETURNED" | null;
   assigneeId: string;
   assignedBy: string;
   assigneeName: string;
   assignedByName: string;
+  commentCount: number;
 }
 
 export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {

@@ -16,12 +16,6 @@ export const tasksRouter = Router();
 tasksRouter.use(requireAuth);
 
 const STATUSES = ["ASSIGNED", "IN_PROGRESS", "FOR_REVIEW", "DONE"] as const;
-const STATUS_LABEL: Record<(typeof STATUSES)[number], string> = {
-  ASSIGNED: "Assigned",
-  IN_PROGRESS: "In Progress",
-  FOR_REVIEW: "For Review",
-  DONE: "Done",
-};
 
 function monthBounds(month: string) {
   const [y, m] = month.split("-").map(Number);
@@ -29,11 +23,25 @@ function monthBounds(month: string) {
   return { start: `${month}-01`, end: `${month}-${String(last).padStart(2, "0")}` };
 }
 
-async function withNames<T extends { assigneeId: string; assignedBy: string }>(tasks: T[]) {
+async function withNames<T extends { id: string; assigneeId: string; assignedBy: string }>(tasks: T[]) {
   const ids = [...new Set(tasks.flatMap((t) => [t.assigneeId, t.assignedBy]))];
   const users = ids.length ? await db.selectFrom("User").select(["id", "name"]).where("id", "in", ids).execute() : [];
   const byId = new Map(users.map((u) => [u.id, u.name]));
-  return tasks.map((t) => ({ ...t, assigneeName: byId.get(t.assigneeId) ?? "Unknown", assignedByName: byId.get(t.assignedBy) ?? "Unknown" }));
+  const counts = tasks.length
+    ? await db
+        .selectFrom("TaskComment")
+        .select(["taskId", ({ fn }) => fn.countAll<string>().as("n")])
+        .where("taskId", "in", tasks.map((t) => t.id))
+        .groupBy("taskId")
+        .execute()
+    : [];
+  const countById = new Map(counts.map((c) => [c.taskId, parseInt(c.n, 10)]));
+  return tasks.map((t) => ({
+    ...t,
+    assigneeName: byId.get(t.assigneeId) ?? "Unknown",
+    assignedByName: byId.get(t.assignedBy) ?? "Unknown",
+    commentCount: countById.get(t.id) ?? 0,
+  }));
 }
 
 /** GET /tasks/me?month=YYYY-MM — tasks assigned to me (whole list if no month). */
@@ -57,19 +65,6 @@ tasksRouter.get("/assigned", allow("MANAGER", "ADMIN"), async (req, res) => {
   if (req.user!.role !== "ADMIN") query = query.where("assignedBy", "=", req.user!.sub);
   const tasks = await query.orderBy("dueDate", "desc").limit(100).execute();
   res.json({ tasks: await withNames(tasks) });
-});
-
-/** GET /tasks/notifications — my task notifications ("X assigned you a task", "X marked … as Done"). */
-tasksRouter.get("/notifications", async (req, res) => {
-  const notifications = await db
-    .selectFrom("Notification")
-    .selectAll()
-    .where("userId", "=", req.user!.sub)
-    .where("type", "like", "TASK\\_%")
-    .orderBy("createdAt", "desc")
-    .limit(15)
-    .execute();
-  res.json({ notifications });
 });
 
 /** GET /tasks/assignees — who I'm allowed to assign a task to (active staff in my scope, not myself). */
@@ -107,10 +102,6 @@ tasksRouter.post("/", allow("MANAGER", "ADMIN"), async (req, res) => {
     .returningAll()
     .executeTakeFirstOrThrow();
 
-  await db
-    .insertInto("Notification")
-    .values({ userId: assigneeId, type: "TASK_ASSIGNED", message: `${req.user!.name} assigned you a task: ${subject}`, relatedDate: dueDate })
-    .execute();
   await writeAuditLog({ userId: req.user!.sub, action: "TaskAssigned", targetId: task.id });
   res.status(201).json({ task });
 });
@@ -178,27 +169,90 @@ tasksRouter.patch("/:id/status", async (req, res) => {
     return res.status(403).json({ error: "You can only update your own tasks" });
   }
 
+  // A new status from the assignee starts a fresh review, so any earlier action is cleared.
   const task = await db
     .updateTable("Task")
-    .set({ status: parsed.data.status, updatedAt: new Date() })
+    .set({ status: parsed.data.status, actionTaken: null, updatedAt: new Date() })
     .where("id", "=", existing.id)
     .returningAll()
     .executeTakeFirstOrThrow();
 
-  // Let the person who assigned it know when the assignee moves it.
-  if (isAssignee && existing.assignedBy !== req.user!.sub && existing.status !== task.status) {
-    await db
-      .insertInto("Notification")
-      .values({
-        userId: existing.assignedBy,
-        type: "TASK_STATUS",
-        message: `${req.user!.name} marked "${existing.subject}" as ${STATUS_LABEL[task.status]}`,
-        relatedDate: existing.dueDate,
-      })
-      .execute();
-  }
   await writeAuditLog({ userId: req.user!.sub, action: "TaskStatusChanged", targetId: task.id, metadata: { status: task.status } });
   res.json({ task });
+});
+
+const actionSchema = z.object({ action: z.enum(["APPROVED", "RETURNED"]) });
+
+/**
+ * PATCH /tasks/:id/action — the Action Taken on a task sent For Review:
+ * APPROVED marks it Done, RETURNED sends it back to In Progress for rework.
+ * Only whoever assigned it (or an Admin), and never on personal to-dos.
+ */
+tasksRouter.patch("/:id/action", allow("MANAGER", "ADMIN"), async (req, res) => {
+  const parsed = actionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Action must be Approved or Return" });
+  const existing = await db.selectFrom("Task").selectAll().where("id", "=", req.params.id).executeTakeFirst();
+  if (!existing) return res.status(404).json({ error: "Task not found" });
+  if (existing.assigneeId === existing.assignedBy) return res.status(400).json({ error: "Personal tasks don't need approval" });
+  if (existing.assignedBy !== req.user!.sub && req.user!.role !== "ADMIN") {
+    return res.status(403).json({ error: "You can only review tasks you assigned" });
+  }
+  if (existing.status !== "FOR_REVIEW") {
+    return res.status(400).json({ error: "Only tasks that are For Review can be approved or returned" });
+  }
+  const task = await db
+    .updateTable("Task")
+    .set({ status: parsed.data.action === "APPROVED" ? "DONE" : "IN_PROGRESS", actionTaken: parsed.data.action, updatedAt: new Date() })
+    .where("id", "=", existing.id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+  await writeAuditLog({ userId: req.user!.sub, action: parsed.data.action === "APPROVED" ? "TaskApproved" : "TaskReturned", targetId: task.id });
+  res.json({ task });
+});
+
+/** Who may read/write a task's comments: the assignee, whoever assigned it, and Admins. */
+async function commentableTask(taskId: string, user: { sub: string; role: string }) {
+  const task = await db.selectFrom("Task").select(["id", "assigneeId", "assignedBy"]).where("id", "=", taskId).executeTakeFirst();
+  if (!task) return { error: 404 as const };
+  if (task.assigneeId !== user.sub && task.assignedBy !== user.sub && user.role !== "ADMIN") return { error: 403 as const };
+  return { task };
+}
+
+/** GET /tasks/:id/comments */
+tasksRouter.get("/:id/comments", async (req, res) => {
+  const found = await commentableTask(req.params.id, req.user!);
+  if (found.error) return res.status(found.error).json({ error: found.error === 404 ? "Task not found" : "You can't view this task's comments" });
+  const comments = await db.selectFrom("TaskComment").selectAll().where("taskId", "=", req.params.id).orderBy("createdAt", "asc").execute();
+  const ids = [...new Set(comments.map((c) => c.authorId))];
+  const users = ids.length ? await db.selectFrom("User").select(["id", "name", "role"]).where("id", "in", ids).execute() : [];
+  const byId = new Map(users.map((u) => [u.id, u]));
+  res.json({ comments: comments.map((c) => ({ ...c, authorName: byId.get(c.authorId)?.name ?? "Unknown", authorRole: byId.get(c.authorId)?.role ?? null })) });
+});
+
+const commentSchema = z.object({ body: z.string().trim().min(1).max(1000) });
+
+/** POST /tasks/:id/comments */
+tasksRouter.post("/:id/comments", async (req, res) => {
+  const parsed = commentSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Write a comment (up to 1000 characters)" });
+  const found = await commentableTask(req.params.id, req.user!);
+  if (found.error) return res.status(found.error).json({ error: found.error === 404 ? "Task not found" : "You can't comment on this task" });
+  const comment = await db
+    .insertInto("TaskComment")
+    .values({ taskId: req.params.id, authorId: req.user!.sub, body: parsed.data.body })
+    .returningAll()
+    .executeTakeFirstOrThrow();
+  await writeAuditLog({ userId: req.user!.sub, action: "TaskCommented", targetId: req.params.id });
+  res.status(201).json({ comment });
+});
+
+/** DELETE /tasks/:id/comments/:commentId — the author or an Admin. */
+tasksRouter.delete("/:id/comments/:commentId", async (req, res) => {
+  const comment = await db.selectFrom("TaskComment").select(["id", "authorId"]).where("id", "=", req.params.commentId).where("taskId", "=", req.params.id).executeTakeFirst();
+  if (!comment) return res.status(404).json({ error: "Comment not found" });
+  if (comment.authorId !== req.user!.sub && req.user!.role !== "ADMIN") return res.status(403).json({ error: "You can only delete your own comments" });
+  await db.deleteFrom("TaskComment").where("id", "=", comment.id).execute();
+  res.json({ ok: true });
 });
 
 /** DELETE /tasks/:id — whoever created it (so you can remove your own tasks) or an Admin. */

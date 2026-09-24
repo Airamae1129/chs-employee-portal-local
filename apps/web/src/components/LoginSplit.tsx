@@ -114,7 +114,7 @@ export function LoginSplit({
           </form>
 
           <p className="mt-4 text-xs text-gray-400">
-            Forgotten password? An administrator can reset it under Staff Accounts.
+            Forgot your password? Please contact your administrator.
           </p>
         </div>
       </div>

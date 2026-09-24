@@ -64,6 +64,19 @@ filesRouter.get("/:key(*)", async (req, res) => {
     }
     res.send(data);
   } catch {
+    // A person opening the link in a browser gets a readable page; API callers still get JSON.
+    if (req.accepts(["json", "html"]) === "html") {
+      return res
+        .status(404)
+        .type("html")
+        .send(
+          `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>File unavailable</title>` +
+            `<body style="font-family:system-ui,sans-serif;background:#f3f2f0;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center">` +
+            `<div style="background:#fff;border-radius:16px;padding:32px;max-width:420px;box-shadow:0 2px 12px rgba(0,0,0,.08);text-align:center">` +
+            `<h2 style="margin:0 0 8px;color:#1a1512">This file is no longer available</h2>` +
+            `<p style="margin:0;color:#6b7280;line-height:1.5">Please ask an administrator to upload it again.</p></div></body>`
+        );
+    }
     res.status(404).json({ error: "File not found" });
   }
 });

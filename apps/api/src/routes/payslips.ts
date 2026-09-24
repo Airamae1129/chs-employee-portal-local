@@ -72,11 +72,26 @@ payslipsRouter.post("/ireland/upload", allow("ADMIN"), upload.single("file"), as
   const fileKey = `payslips-ie/${parsed.data.userId}/${parsed.data.period}.pdf`;
   await getStorageAdapter().putObject(fileKey, req.file.buffer, "application/pdf");
 
-  const payslip = await db
-    .insertInto("PayslipIreland")
-    .values({ userId: parsed.data.userId, period: parsed.data.period, fileKey, uploadedBy: req.user!.sub })
-    .returningAll()
-    .executeTakeFirstOrThrow();
+  // One payslip per employee per month: uploading again replaces the earlier
+  // one (and repairs an entry whose file has gone missing) instead of adding a duplicate.
+  const existing = await db
+    .selectFrom("PayslipIreland")
+    .select("id")
+    .where("userId", "=", parsed.data.userId)
+    .where("period", "=", parsed.data.period)
+    .executeTakeFirst();
+  const payslip = existing
+    ? await db
+        .updateTable("PayslipIreland")
+        .set({ fileKey, uploadedBy: req.user!.sub, uploadedAt: new Date() })
+        .where("id", "=", existing.id)
+        .returningAll()
+        .executeTakeFirstOrThrow()
+    : await db
+        .insertInto("PayslipIreland")
+        .values({ userId: parsed.data.userId, period: parsed.data.period, fileKey, uploadedBy: req.user!.sub })
+        .returningAll()
+        .executeTakeFirstOrThrow();
   await writeAuditLog({ userId: req.user!.sub, action: "PayslipUploaded", targetId: payslip.id });
   res.status(201).json({ payslip });
 });

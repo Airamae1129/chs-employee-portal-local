@@ -5,7 +5,7 @@ import { requireAuth } from "../middleware/auth";
 import { allow } from "../middleware/rbac";
 import { writeAuditLog } from "../utils/audit";
 import { getStorageAdapter } from "../utils/storage";
-import { renderPayslipPdf } from "../utils/payslipPdf";
+import { renderGeneratedPayslip } from "../utils/generatedPayslip";
 import { countWeekdaysInMonth, weekdayDatesInMonth } from "../utils/time";
 import { paidLeaveDayStatusForYear } from "../utils/leave";
 
@@ -177,26 +177,8 @@ payrollRouter.patch("/:id/approve", async (req, res) => {
 payrollRouter.patch("/:id/publish", async (req, res) => {
   const existing = await db.selectFrom("GeneratedPayslip").selectAll().where("id", "=", req.params.id).executeTakeFirst();
   if (!existing) return res.status(404).json({ error: "Payslip not found" });
-  const employee = await db.selectFrom("User").selectAll().where("id", "=", existing.userId).executeTakeFirst();
-  if (!employee) return res.status(404).json({ error: "Employee not found" });
-
-  const [year, month] = existing.period.split("-").map(Number);
-  const monthLabel = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
-
-  const pdf = await renderPayslipPdf({
-    employeeName: employee.name,
-    email: employee.email,
-    monthLabel,
-    totalWorkHours: Number(existing.totalWorkHours),
-    holidayPay: Number(existing.holidayPay),
-    leaveUsedDays: Number(existing.leaveUsedDays),
-    netPay: Number(existing.netPay),
-    // pdf-lib's standard WinAnsi-encoded fonts can't render "₱" (only
-    // Latin-1/WinAnsi glyphs are available without embedding a custom
-    // Unicode font), so the PDF uses the ISO code instead — the web UI
-    // still shows the real "₱" symbol since that's plain HTML text.
-    currencySymbol: existing.currency === "EUR" ? "€" : "PHP ",
-  });
+  const pdf = await renderGeneratedPayslip(existing);
+  if (!pdf) return res.status(404).json({ error: "Employee not found" });
 
   const fileKey = `payslips-generated/${existing.userId}/${existing.period}-v${existing.version}.pdf`;
   await getStorageAdapter().putObject(fileKey, pdf, "application/pdf");

@@ -69,7 +69,7 @@ class LocalStorageAdapter implements StorageAdapter {
     const expires = Date.now() + ttlMinutes * 60 * 1000;
     const payload = `${key}:${expires}`;
     const sig = crypto.createHmac("sha256", SIGNING_SECRET).update(payload).digest("hex");
-    return `http://localhost:${env.apiPort}/files/${encodeURIComponent(key)}?expires=${expires}&sig=${sig}`;
+    return `${env.publicApiUrl}/files/${encodeURIComponent(key)}?expires=${expires}&sig=${sig}`;
   }
 }
 

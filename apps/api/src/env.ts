@@ -17,6 +17,13 @@ export const env = {
   // other copies of this project running on the same machine.
   apiPort: parseInt(process.env.PORT ?? process.env.API_PORT ?? "4000", 10),
   webOrigin: required("WEB_ORIGIN", "http://localhost:3000"),
+  // Public address of this API, used to build file links returned to the browser.
+  // Render provides RENDER_EXTERNAL_URL automatically; locally it falls back to localhost.
+  publicApiUrl: (
+    process.env.PUBLIC_API_URL ??
+    process.env.RENDER_EXTERNAL_URL ??
+    `http://localhost:${parseInt(process.env.PORT ?? process.env.API_PORT ?? "4000", 10)}`
+  ).replace(/\/+$/, ""),
 
   jwtSecret: required("JWT_SECRET", "dev-only-insecure-secret-change-me"),
   sessionTtlHours: parseInt(process.env.SESSION_TTL_HOURS ?? "12", 10),

@@ -1,5 +1,7 @@
 import { Router } from "express";
+import { db } from "../db";
 import { getStorageAdapter, verifyLocalSignedUrl } from "../utils/storage";
+import { renderGeneratedPayslip } from "../utils/generatedPayslip";
 
 export const filesRouter = Router();
 
@@ -21,7 +23,21 @@ filesRouter.get("/:key(*)", async (req, res) => {
 
   try {
     const adapter = getStorageAdapter();
-    const data = await adapter.getObject(key);
+    let data: Buffer;
+    try {
+      data = await adapter.getObject(key);
+    } catch (err) {
+      // Hosts with an ephemeral disk (e.g. Render's free tier) lose stored files on
+      // restart. A generated payslip is fully derived from its database row, so
+      // rebuild it instead of failing.
+      const row = key.startsWith("payslips-generated/")
+        ? await db.selectFrom("GeneratedPayslip").selectAll().where("fileKey", "=", key).executeTakeFirst()
+        : undefined;
+      const rebuilt = row ? await renderGeneratedPayslip(row) : null;
+      if (!rebuilt) throw err;
+      data = rebuilt;
+      await adapter.putObject(key, rebuilt, "application/pdf").catch(() => void 0);
+    }
     res.setHeader("Content-Type", "application/pdf");
     // Same signed link works for both — View renders inline, Download
     // (?download=1) forces a save-as with a friendly filename.

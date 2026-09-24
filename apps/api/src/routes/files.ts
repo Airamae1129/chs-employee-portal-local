@@ -5,6 +5,19 @@ import { renderGeneratedPayslip } from "../utils/generatedPayslip";
 
 export const filesRouter = Router();
 
+const CONTENT_TYPES: Record<string, string> = {
+  pdf: "application/pdf",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  txt: "text/plain; charset=utf-8",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+};
+
 /**
  * Serves storage objects by key, gated by the HMAC-signed, expiring
  * token produced by StorageAdapter.getSignedUrl — this route is what
@@ -38,12 +51,14 @@ filesRouter.get("/:key(*)", async (req, res) => {
       data = rebuilt;
       await adapter.putObject(key, rebuilt, "application/pdf").catch(() => void 0);
     }
-    res.setHeader("Content-Type", "application/pdf");
+    const filename = key.split("/").pop() ?? "document";
+    const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+    res.setHeader("Content-Type", CONTENT_TYPES[ext] ?? "application/octet-stream");
     // Same signed link works for both — View renders inline, Download
     // (?download=1) forces a save-as with a friendly filename.
     if (req.query.download) {
-      const filename = key.split("/").pop() ?? "payslip.pdf";
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      const safe = filename.replace(/[^\w.\-]+/g, "_");
+      res.setHeader("Content-Disposition", `attachment; filename="${safe}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
     } else {
       res.setHeader("Content-Disposition", "inline");
     }

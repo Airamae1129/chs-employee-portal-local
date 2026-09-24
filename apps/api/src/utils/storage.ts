@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { env } from "../env";
+import { db } from "../db";
 
 /**
  * Storage adapter interface — deliberately S3-shaped so swapping
@@ -49,14 +50,39 @@ class LocalStorageAdapter implements StorageAdapter {
     return resolved;
   }
 
-  async putObject(key: string, data: Buffer, _contentType: string): Promise<void> {
+  // Files live on disk for speed, and every upload is also saved in the database
+  // (StoredFile). Hosts with an ephemeral disk lose the disk copy on restart; the
+  // database copy is what keeps uploaded documents available.
+  async putObject(key: string, data: Buffer, contentType: string): Promise<void> {
     const full = this.resolveKey(key);
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, data);
+    try {
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, data);
+    } catch (err) {
+      console.error("[storage] disk write failed, relying on database copy:", err);
+    }
+    await db
+      .insertInto("StoredFile")
+      .values({ key, contentType, data })
+      .onConflict((oc) => oc.column("key").doUpdateSet({ contentType, data }))
+      .execute();
   }
 
   async getObject(key: string): Promise<Buffer> {
-    return fs.readFileSync(this.resolveKey(key));
+    const full = this.resolveKey(key);
+    try {
+      return fs.readFileSync(full);
+    } catch {
+      const stored = await db.selectFrom("StoredFile").select("data").where("key", "=", key).executeTakeFirst();
+      if (!stored) throw new Error(`File not found: ${key}`);
+      try {
+        fs.mkdirSync(path.dirname(full), { recursive: true });
+        fs.writeFileSync(full, stored.data);
+      } catch {
+        // disk cache is best-effort
+      }
+      return stored.data;
+    }
   }
 
   /**

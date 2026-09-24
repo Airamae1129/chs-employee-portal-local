@@ -6,7 +6,7 @@ import { PageHeader, Card, Badge } from "@/components/PageHeader";
 import { Button } from "@/components/Button";
 import { apiFetch, API_URL } from "@/lib/api";
 import { useCurrentUser } from "@/lib/useCurrentUser";
-import { notifySuccess, notifyError } from "@/lib/alerts";
+import { notifySuccess, notifyError, confirmAction } from "@/lib/alerts";
 
 interface HRRequest {
   id: string;
@@ -87,6 +87,23 @@ export default function HRRequestsPage() {
   }
 
   async function decide(id: string, decision: "APPROVED" | "REJECTED") {
+    const req = teamRequests.find((r) => r.id === id);
+    const who = req?.employee?.name ?? "this employee";
+    const kind = req
+      ? { LEAVE: "leave", COE: "Certificate of Employment", HR_LETTER: "HR letter", OTHER: "other" }[req.requestType]
+      : "request";
+    const isLeave = req?.requestType === "LEAVE";
+    const approve = decision === "APPROVED";
+    const ok = await confirmAction({
+      title: approve ? `Approve ${who}'s ${kind} request?` : `Reject ${who}'s ${kind} request?`,      text: approve
+        ? isLeave
+          ? "Approving this leave request will deduct the leave days from their paid leave balance. This can't be undone here."
+          : "The request will be marked as approved. This can't be undone here."
+        : "The request will be marked as rejected. This can't be undone here.",
+      confirmText: approve ? "Yes, approve" : "Yes, reject",
+      danger: !approve,
+    });
+    if (!ok) return;
     try {
       await apiFetch(`/hr-requests/${id}/decision`, { method: "PATCH", body: JSON.stringify({ decision }) });
       refresh();

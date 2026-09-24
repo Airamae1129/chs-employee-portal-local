@@ -126,6 +126,13 @@ export interface ClientWorkspaceItemTable {
   updatedAt: Generated<Timestamp>;
 }
 
+export interface StoredFileTable {
+  key: string;
+  contentType: Generated<string>;
+  data: Buffer;
+  createdAt: Generated<Timestamp>;
+}
+
 export interface AnnouncementTable {
   id: Generated<string>;
   authorId: string | null;
@@ -232,4 +239,5 @@ export interface Database {
   AuditLog: AuditLogTable;
   Announcement: AnnouncementTable;
   Notification: NotificationTable;
+  StoredFile: StoredFileTable;
 }

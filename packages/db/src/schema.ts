@@ -120,7 +120,8 @@ export interface ClientWorkspaceItemTable {
   workspaceId: string;
   title: string;
   description: string | null;
-  linkUrl: string;
+  linkUrl: string | null;
+  fileKey: string | null;
   createdBy: string | null;
   createdAt: Generated<Timestamp>;
   updatedAt: Generated<Timestamp>;

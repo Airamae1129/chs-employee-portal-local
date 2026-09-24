@@ -1,13 +1,23 @@
 import { Router } from "express";
 import { randomUUID } from "crypto";
+import multer from "multer";
 import { z } from "zod";
 import { db } from "../db";
 import { requireAuth } from "../middleware/auth";
 import { allow } from "../middleware/rbac";
 import { writeAuditLog } from "../utils/audit";
+import { getStorageAdapter } from "../utils/storage";
 
 export const workspacesRouter = Router();
 workspacesRouter.use(requireAuth);
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
+async function removeStoredFiles(keys: (string | null)[]) {
+  for (const key of keys.filter((k): k is string => !!k)) {
+    await db.deleteFrom("StoredFile").where("key", "=", key).execute();
+  }
+}
 
 /** GET /workspaces — directory of clients, each with its nested links; own access-request status included. */
 workspacesRouter.get("/", async (req, res) => {
@@ -32,7 +42,11 @@ workspacesRouter.get("/", async (req, res) => {
     workspaces: workspaces.map((w) => ({
       ...w,
       myAccessRequest: byWorkspace.get(w.id) ?? null,
-      items: itemsByWorkspace.get(w.id) ?? [],
+      items: (itemsByWorkspace.get(w.id) ?? []).map(({ fileKey, ...i }) => ({
+        ...i,
+        hasFile: !!fileKey,
+        fileName: fileKey ? fileKey.split("/").pop()!.replace(/^\d+-/, "") : null,
+      })),
     })),
   });
 });
@@ -76,6 +90,8 @@ workspacesRouter.patch("/:id", allow("MANAGER", "ADMIN"), async (req, res) => {
 
 /** DELETE /workspaces/:id — remove a client folder and its links. */
 workspacesRouter.delete("/:id", allow("MANAGER", "ADMIN"), async (req, res) => {
+  const files = await db.selectFrom("ClientWorkspaceItem").select("fileKey").where("workspaceId", "=", req.params.id).execute();
+  await removeStoredFiles(files.map((f) => f.fileKey));
   await db.deleteFrom("WorkspaceAccessRequest").where("workspaceId", "=", req.params.id).execute();
   await db.deleteFrom("ClientWorkspaceItem").where("workspaceId", "=", req.params.id).execute();
   await db.deleteFrom("ClientWorkspace").where("id", "=", req.params.id).execute();
@@ -84,31 +100,54 @@ workspacesRouter.delete("/:id", allow("MANAGER", "ADMIN"), async (req, res) => {
 });
 
 const itemSchema = z.object({
-  title: z.string().min(1),
+  title: z.string().trim().min(1),
   description: z.string().optional(),
-  linkUrl: z.string().url(),
+  linkUrl: z.string().url().optional(),
 });
 
 /**
- * POST /workspaces/:id/items — a titled SharePoint link inside a client
- * folder. Revision: "visible for ALL Employee, Manager and Admin anyone
- * can Update" — any authenticated staff member can add or edit these.
+ * POST /workspaces/:id/items — a titled SharePoint link or an uploaded
+ * file inside a client folder. Revision: "visible for ALL Employee,
+ * Manager and Admin anyone can Update" — any authenticated staff member
+ * can add or edit these.
  */
-workspacesRouter.post("/:id/items", async (req, res) => {
+workspacesRouter.post("/:id/items", upload.single("file"), async (req, res) => {
   const parsed = itemSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: "title and linkUrl are required" });
+  if (!parsed.success) return res.status(400).json({ error: "A title and a valid link are required" });
+  if (!req.file && !parsed.data.linkUrl) return res.status(400).json({ error: "Provide a link or upload a file" });
+  const workspace = await db.selectFrom("ClientWorkspace").select("id").where("id", "=", req.params.id).executeTakeFirst();
+  if (!workspace) return res.status(404).json({ error: "Client folder not found" });
+
+  let fileKey: string | null = null;
+  if (req.file) {
+    fileKey = `workspaces/${workspace.id}/${Date.now()}-${req.file.originalname}`;
+    await getStorageAdapter().putObject(fileKey, req.file.buffer, req.file.mimetype);
+  }
   const item = await db
     .insertInto("ClientWorkspaceItem")
     .values({
-      workspaceId: req.params.id,
+      workspaceId: workspace.id,
       title: parsed.data.title,
-      description: parsed.data.description ?? null,
-      linkUrl: parsed.data.linkUrl,
+      description: parsed.data.description || null,
+      linkUrl: req.file ? null : parsed.data.linkUrl ?? null,
+      fileKey,
       createdBy: req.user!.sub,
     })
     .returningAll()
     .executeTakeFirstOrThrow();
   res.status(201).json({ item });
+});
+
+/** GET /workspaces/:id/items/:itemId/file — short-lived signed link to an uploaded file. */
+workspacesRouter.get("/:id/items/:itemId/file", async (req, res) => {
+  const item = await db
+    .selectFrom("ClientWorkspaceItem")
+    .select("fileKey")
+    .where("id", "=", req.params.itemId)
+    .where("workspaceId", "=", req.params.id)
+    .executeTakeFirst();
+  if (!item?.fileKey) return res.status(404).json({ error: "No file for this document" });
+  res.json({ fileUrl: await getStorageAdapter().getSignedUrl(item.fileKey) });
 });
 
 const itemUpdateSchema = itemSchema.partial();
@@ -120,12 +159,17 @@ workspacesRouter.patch("/:id/items/:itemId", async (req, res) => {
     .updateTable("ClientWorkspaceItem")
     .set({ ...parsed.data, updatedAt: new Date() })
     .where("id", "=", req.params.itemId)
+    .where("workspaceId", "=", req.params.id)
     .returningAll()
-    .executeTakeFirstOrThrow();
+    .executeTakeFirst();
+  if (!item) return res.status(404).json({ error: "Document not found" });
   res.json({ item });
 });
 
 workspacesRouter.delete("/:id/items/:itemId", allow("MANAGER", "ADMIN"), async (req, res) => {
+  const item = await db.selectFrom("ClientWorkspaceItem").select("fileKey").where("id", "=", req.params.itemId).where("workspaceId", "=", req.params.id).executeTakeFirst();
+  if (!item) return res.status(404).json({ error: "Document not found" });
+  await removeStoredFiles([item.fileKey]);
   await db.deleteFrom("ClientWorkspaceItem").where("id", "=", req.params.itemId).execute();
   res.json({ ok: true });
 });

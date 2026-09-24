@@ -48,12 +48,28 @@ tasksRouter.get("/me", async (req, res) => {
   res.json({ tasks: await withNames(tasks) });
 });
 
-/** GET /tasks/assigned — tasks I assigned (Admin sees everyone's), with their progress. */
+/**
+ * GET /tasks/assigned — tasks assigned to other people (Admin sees everyone's),
+ * with their progress. Personal to-dos people add for themselves stay private.
+ */
 tasksRouter.get("/assigned", allow("MANAGER", "ADMIN"), async (req, res) => {
-  let query = db.selectFrom("Task").selectAll();
+  let query = db.selectFrom("Task").selectAll().where((eb) => eb("assigneeId", "!=", eb.ref("assignedBy")));
   if (req.user!.role !== "ADMIN") query = query.where("assignedBy", "=", req.user!.sub);
   const tasks = await query.orderBy("dueDate", "desc").limit(100).execute();
   res.json({ tasks: await withNames(tasks) });
+});
+
+/** GET /tasks/notifications — my task notifications ("X assigned you a task", "X marked … as Done"). */
+tasksRouter.get("/notifications", async (req, res) => {
+  const notifications = await db
+    .selectFrom("Notification")
+    .selectAll()
+    .where("userId", "=", req.user!.sub)
+    .where("type", "like", "TASK\\_%")
+    .orderBy("createdAt", "desc")
+    .limit(15)
+    .execute();
+  res.json({ notifications });
 });
 
 /** GET /tasks/assignees — who I'm allowed to assign a task to (active staff in my scope, not myself). */
@@ -99,6 +115,54 @@ tasksRouter.post("/", allow("MANAGER", "ADMIN"), async (req, res) => {
   res.status(201).json({ task });
 });
 
+const personalSchema = createSchema.omit({ assigneeId: true });
+
+/** POST /tasks/mine — any role adds a task for themselves (a personal to-do that also shows on their calendar). */
+tasksRouter.post("/mine", async (req, res) => {
+  const parsed = personalSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "A subject and a date are required (the link must be a valid URL)" });
+  const { subject, note, link, dueDate } = parsed.data;
+  const task = await db
+    .insertInto("Task")
+    .values({ assigneeId: req.user!.sub, assignedBy: req.user!.sub, subject, note: note || null, link: link || null, dueDate })
+    .returningAll()
+    .executeTakeFirstOrThrow();
+  await writeAuditLog({ userId: req.user!.sub, action: "TaskCreated", targetId: task.id });
+  res.status(201).json({ task });
+});
+
+const editSchema = z.object({
+  subject: z.string().trim().min(1).max(200).optional(),
+  note: z.string().max(2000).optional(),
+  link: z.string().trim().url().optional().or(z.literal("")),
+  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+/** PATCH /tasks/:id — edit the details of a task you created (your own, or one you assigned); Admins can edit any. */
+tasksRouter.patch("/:id", async (req, res) => {
+  const parsed = editSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Invalid task (the link must be a valid URL)" });
+  const existing = await db.selectFrom("Task").select(["id", "assignedBy"]).where("id", "=", req.params.id).executeTakeFirst();
+  if (!existing) return res.status(404).json({ error: "Task not found" });
+  if (existing.assignedBy !== req.user!.sub && req.user!.role !== "ADMIN") {
+    return res.status(403).json({ error: "You can only edit tasks you created" });
+  }
+  const { link, note, ...rest } = parsed.data;
+  const task = await db
+    .updateTable("Task")
+    .set({
+      ...rest,
+      ...(note !== undefined ? { note: note || null } : {}),
+      ...(link !== undefined ? { link: link || null } : {}),
+      updatedAt: new Date(),
+    })
+    .where("id", "=", existing.id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+  await writeAuditLog({ userId: req.user!.sub, action: "TaskUpdated", targetId: task.id });
+  res.json({ task });
+});
+
 const statusSchema = z.object({ status: z.enum(STATUSES) });
 
 /** PATCH /tasks/:id/status — the assignee moves their task along; the assigner and Admins can too. */
@@ -137,12 +201,12 @@ tasksRouter.patch("/:id/status", async (req, res) => {
   res.json({ task });
 });
 
-/** DELETE /tasks/:id — the assigner or an Admin. */
-tasksRouter.delete("/:id", allow("MANAGER", "ADMIN"), async (req, res) => {
+/** DELETE /tasks/:id — whoever created it (so you can remove your own tasks) or an Admin. */
+tasksRouter.delete("/:id", async (req, res) => {
   const existing = await db.selectFrom("Task").select(["id", "assignedBy"]).where("id", "=", req.params.id).executeTakeFirst();
   if (!existing) return res.status(404).json({ error: "Task not found" });
   if (existing.assignedBy !== req.user!.sub && req.user!.role !== "ADMIN") {
-    return res.status(403).json({ error: "You can only delete tasks you assigned" });
+    return res.status(403).json({ error: "You can only delete tasks you created" });
   }
   await db.deleteFrom("Task").where("id", "=", existing.id).execute();
   await writeAuditLog({ userId: req.user!.sub, action: "TaskDeleted", targetId: existing.id });

@@ -9,6 +9,7 @@ import {
   CalendarDays,
   ShieldCheck,
   Banknote,
+  ClipboardList,
 } from "lucide-react";
 import { Role } from "./types";
 
@@ -26,6 +27,7 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutGrid, roles: ["EMPLOYEE", "MANAGER", "ADMIN"] },
   { href: "/timekeeping", label: "Timekeeping & Calendar", icon: Clock, roles: ["EMPLOYEE", "MANAGER", "ADMIN"] },
+  { href: "/tasks", label: "Task Assigned", icon: ClipboardList, roles: ["EMPLOYEE", "MANAGER", "ADMIN"] },
   { href: "/hr-requests", label: "HR Requests", icon: FileText, roles: ["EMPLOYEE", "MANAGER", "ADMIN"] },
   { href: "/policies", label: "Policies & Templates", icon: BookOpen, roles: ["EMPLOYEE", "MANAGER", "ADMIN"] },
   { href: "/workspaces", label: "Client Workspaces", icon: Link2, roles: ["EMPLOYEE", "MANAGER", "ADMIN"] },

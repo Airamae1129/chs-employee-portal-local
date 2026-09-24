@@ -8,12 +8,16 @@ import { runMissingClockOutNotificationSweep } from "../utils/scheduler";
 export const notificationsRouter = Router();
 notificationsRouter.use(requireAuth);
 
-/** GET /notifications/me — own notifications (any role). */
+/**
+ * GET /notifications/me — own notifications (any role), for the Timekeeping page.
+ * Task notifications live on the Task Assigned page instead (GET /tasks/notifications).
+ */
 notificationsRouter.get("/me", async (req, res) => {
   const notifications = await db
     .selectFrom("Notification")
     .selectAll()
     .where("userId", "=", req.user!.sub)
+    .where("type", "not like", "TASK\\_%")
     .orderBy("createdAt", "desc")
     .limit(20)
     .execute();

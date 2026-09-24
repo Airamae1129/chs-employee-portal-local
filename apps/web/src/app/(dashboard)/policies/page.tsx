@@ -130,12 +130,12 @@ export default function PoliciesPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  {p.acknowledgementRequired && (
+                  {user.role !== "ADMIN" && p.acknowledgementRequired && (
                     <Badge tone={p.acknowledgedByMe ? "green" : "gold"}>
                       {p.acknowledgedByMe ? "Acknowledged" : "Ack. required"}
                     </Badge>
                   )}
-                  {p.acknowledgementRequired && !p.acknowledgedByMe && (
+                  {user.role !== "ADMIN" && p.acknowledgementRequired && !p.acknowledgedByMe && (
                     <Button size="sm" variant="success" icon={<Check size={13} />} onClick={() => acknowledge(p.id)}>
                       Acknowledge
                     </Button>

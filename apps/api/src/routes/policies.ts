@@ -113,6 +113,10 @@ policiesRouter.delete("/:id", async (req, res) => {
 
 /** POST /policies/:id/acknowledge — read-receipt tracking. */
 policiesRouter.post("/:id/acknowledge", async (req, res) => {
+  // Admins publish and manage policies; they aren't required to acknowledge them.
+  if (req.user!.role === "ADMIN") {
+    return res.status(403).json({ error: "Admins don't need to acknowledge policies" });
+  }
   const existing = await db
     .selectFrom("PolicyAcknowledgement")
     .selectAll()
@@ -132,15 +136,23 @@ policiesRouter.post("/:id/acknowledge", async (req, res) => {
 /** GET /policies/compliance/report — Admin: acknowledgement compliance (Phase 2). */
 policiesRouter.get("/compliance/report", allow("ADMIN"), async (_req, res) => {
   const policies = await db.selectFrom("Policy").selectAll().where("acknowledgementRequired", "=", true).execute();
-  const totalUsersRow = await db.selectFrom("User").select(({ fn }) => fn.countAll<string>().as("count")).where("status", "=", "ACTIVE").executeTakeFirst();
+  // Admins aren't expected to acknowledge, so they're left out of the percentages.
+  const totalUsersRow = await db
+    .selectFrom("User")
+    .select(({ fn }) => fn.countAll<string>().as("count"))
+    .where("status", "=", "ACTIVE")
+    .where("role", "!=", "ADMIN")
+    .executeTakeFirst();
   const totalUsers = totalUsersRow ? parseInt(totalUsersRow.count, 10) : 0;
 
   const report = await Promise.all(
     policies.map(async (p) => {
       const row = await db
         .selectFrom("PolicyAcknowledgement")
+        .innerJoin("User", "User.id", "PolicyAcknowledgement.userId")
         .select(({ fn }) => fn.countAll<string>().as("count"))
-        .where("policyId", "=", p.id)
+        .where("PolicyAcknowledgement.policyId", "=", p.id)
+        .where("User.role", "!=", "ADMIN")
         .executeTakeFirst();
       const acknowledgedCount = row ? parseInt(row.count, 10) : 0;
       return { policy: p, acknowledgedCount, totalUsers, pct: totalUsers ? Math.round((acknowledgedCount / totalUsers) * 100) : 0 };

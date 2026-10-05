@@ -77,21 +77,6 @@ npm run dev:web                # in another terminal: starts the web app on :300
 Open http://localhost:3000 — it redirects to `/login/employee`. Try
 `/login/manager` and `/login/admin` too.
 
-**Seeded accounts** (password login, since Entra ID isn't configured in
-local dev — see below). All seeded users share one password:
-
-| Role     | Email                        | Password      |
-|----------|-------------------------------|---------------|
-| Admin    | admin@cyberhealth.ie          | `ChsDev!2026` |
-| Manager  | manager.ie@cyberhealth.ie      | `ChsDev!2026` |
-| Manager  | manager.ph@cyberhealth.ie      | `ChsDev!2026` |
-| Employee | aira@cyberhealth.ie (PH)       | `ChsDev!2026` |
-| Employee | liam@cyberhealth.ie (IE)       | `ChsDev!2026` |
-| Employee | grace@cyberhealth.ie (IE)      | `ChsDev!2026` |
-| Employee | jomari@cyberhealth.ie (PH)     | `ChsDev!2026` |
-
-Change these before this ever sees a real network — see Security below.
-
 ## Wiring up the real integrations
 
 ### Microsoft Entra ID SSO

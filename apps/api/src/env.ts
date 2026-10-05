@@ -36,8 +36,8 @@ export const env = {
     redirectUri: process.env.ENTRA_REDIRECT_URI ?? "",
   },
 
-  // Outgoing email (sign-in and password-reset codes). With no SMTP_HOST,
-  // local dev prints each email to the API console instead of sending it.
+  // Outgoing email (sign-in and password-reset codes). With neither
+  // BREVO_API_KEY nor SMTP_HOST, local dev prints each email to the API console.
   mail: {
     host: process.env.SMTP_HOST ?? "",
     port: parseInt(process.env.SMTP_PORT ?? "587", 10),
@@ -45,6 +45,8 @@ export const env = {
     user: process.env.SMTP_USER ?? "",
     pass: process.env.SMTP_PASS ?? "",
     from: process.env.MAIL_FROM ?? "CHS Employee Portal <no-reply@cyberhealth.ie>",
+    // Brevo HTTPS API key; when set it's used instead of SMTP (Render's free plan blocks SMTP ports).
+    brevoApiKey: process.env.BREVO_API_KEY ?? "",
   },
 
   teams: {

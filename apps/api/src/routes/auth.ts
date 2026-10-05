@@ -9,7 +9,7 @@ import { issueSessionToken, sessionCookieMaxAgeMs, SESSION_COOKIE_NAME, verifySe
 import { writeAuditLog } from "../utils/audit";
 import { requireAuth } from "../middleware/auth";
 import { sendEmailCode, verifyEmailCode } from "../utils/emailCodes";
-import { maskEmail, MailNotConfiguredError } from "../utils/mailer";
+import { maskEmail, MailDeliveryError, MailNotConfiguredError } from "../utils/mailer";
 import { generateTotpSecret, matchTotpStep, totpSetupPayload } from "../utils/totp";
 import { strongPassword, STRONG_PASSWORD_MESSAGE } from "../utils/passwordPolicy";
 
@@ -120,12 +120,12 @@ async function recordMfaFailure(user: UserRow) {
   await writeAuditLog({ userId: user.id, action: lock ? "MfaLockedOut" : "MfaCodeRejected" });
 }
 
-/** Sends an email code, mapping "email isn't set up" to a readable 503. */
+/** Sends an email code, mapping "email isn't set up" / "couldn't send" to a readable 503. */
 async function trySendEmailCode(res: import("express").Response, user: UserRow, purpose: Parameters<typeof sendEmailCode>[1]) {
   try {
     return await sendEmailCode(user, purpose);
   } catch (e) {
-    if (e instanceof MailNotConfiguredError) {
+    if (e instanceof MailNotConfiguredError || e instanceof MailDeliveryError) {
       res.status(503).json({ error: e.message });
       return null;
     }
@@ -404,14 +404,42 @@ authRouter.post("/password/forgot", async (req, res) => {
   res.json({ ok: true });
 });
 
-/** Forgot password, step 2 — POST /auth/password/verify-code { email, code } → resetToken. */
+/**
+ * Forgot password, step 2 — POST /auth/password/verify-code
+ * { email, code, method? } → resetToken. The code is either the one
+ * emailed by step 1 (method "EMAIL", default) or the current code from
+ * the user's linked authenticator app (method "TOTP"). App codes share
+ * sign-in's lockout and replay protection. Errors are the same whether
+ * or not the account exists or has an app linked.
+ */
 authRouter.post("/password/verify-code", async (req, res) => {
-  const parsed = z.object({ email: z.string().email(), code: z.string().min(6).max(8) }).safeParse(req.body);
+  const parsed = z
+    .object({ email: z.string().email(), code: z.string().min(6).max(8), method: z.enum(["EMAIL", "TOTP"]).default("EMAIL") })
+    .safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Enter your email and the 6-digit code." });
+  const invalid = () => res.status(401).json({ error: "That code is incorrect or has expired." });
+
   const user = await db.selectFrom("User").selectAll().where("email", "=", parsed.data.email.toLowerCase()).executeTakeFirst();
-  if (!user || user.status !== "ACTIVE" || !(await verifyEmailCode(user.id, "PASSWORD_RESET", parsed.data.code))) {
-    return res.status(401).json({ error: "That code is incorrect or has expired." });
+  if (!user || user.status !== "ACTIVE") return invalid();
+
+  if (parsed.data.method === "TOTP") {
+    const locked = mfaLockedMessage(user);
+    if (locked) return res.status(429).json({ error: locked });
+    const step = user.totpSecret ? matchTotpStep(parsed.data.code, user.totpSecret) : null;
+    if (step === null || (user.totpLastUsedStep !== null && step <= user.totpLastUsedStep)) {
+      await recordMfaFailure(user);
+      return invalid();
+    }
+    await db
+      .updateTable("User")
+      .set({ totpLastUsedStep: step, mfaFailedCount: 0, mfaLockedUntil: null })
+      .where("id", "=", user.id)
+      .execute();
+  } else if (!(await verifyEmailCode(user.id, "PASSWORD_RESET", parsed.data.code))) {
+    return invalid();
   }
+
+  await writeAuditLog({ userId: user.id, action: "PasswordResetCodeVerified", metadata: { method: parsed.data.method } });
   res.json({ resetToken: issueChallenge({ kind: "reset", sub: user.id, pwv: passwordVersion(user.passwordHash) }, 15) });
 });
 

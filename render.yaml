@@ -43,6 +43,9 @@ services:
         sync: false
       - key: MAIL_FROM
         sync: false
+      # Render's free plan blocks SMTP ports; set this to send via Brevo's API instead.
+      - key: BREVO_API_KEY
+        sync: false
 
   - type: web
     name: chs-portal-web

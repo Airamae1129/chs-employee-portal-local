@@ -4,7 +4,10 @@ services:
     runtime: node
     plan: free
     buildCommand: npm install --include=dev
-    startCommand: npm run start --workspace=apps/api
+    # Applies any new packages/db/sql migrations (already-applied ones are
+    # skipped) before the API starts, so a deploy never runs new code
+    # against an old schema.
+    startCommand: npm run db:migrate && npm run start --workspace=apps/api
     envVars:
       - key: NODE_ENV
         value: production

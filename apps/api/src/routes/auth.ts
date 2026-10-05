@@ -94,6 +94,12 @@ function passwordVersion(passwordHash: string | null): string {
   return crypto.createHash("sha256").update(passwordHash ?? "").digest("hex").slice(0, 16);
 }
 
+const SAME_PASSWORD_MESSAGE = "Your new password must be different from your current password.";
+
+async function isCurrentPassword(newPassword: string, passwordHash: string | null): Promise<boolean> {
+  return !!passwordHash && (await bcrypt.compare(newPassword, passwordHash));
+}
+
 // ---------- MFA lockout ----------
 
 const MFA_MAX_FAILURES = 5;
@@ -377,6 +383,9 @@ authRouter.post("/set-password", requireAuth, async (req, res) => {
   if (!user?.mustResetPassword) {
     return res.status(400).json({ error: "Use Change Password under Account Security instead." });
   }
+  if (await isCurrentPassword(parsed.data.newPassword, user.passwordHash)) {
+    return res.status(400).json({ error: SAME_PASSWORD_MESSAGE });
+  }
 
   const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
   await db
@@ -454,6 +463,9 @@ authRouter.post("/password/reset", async (req, res) => {
   if (!user || user.status !== "ACTIVE" || passwordVersion(user.passwordHash) !== challenge.pwv) {
     return res.status(401).json({ error: "This reset link has expired. Please request a new code." });
   }
+  if (await isCurrentPassword(parsed.data.newPassword, user.passwordHash)) {
+    return res.status(400).json({ error: SAME_PASSWORD_MESSAGE });
+  }
   const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
   await db
     .updateTable("User")
@@ -480,6 +492,11 @@ authRouter.post("/password/change/send-code", requireAuth, async (req, res) => {
 authRouter.post("/password/change", requireAuth, async (req, res) => {
   const parsed = z.object({ code: z.string().min(6).max(8), newPassword: strongPassword }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Enter the code and a new password." });
+  // Checked before the code, so a rejected password doesn't use up the emailed code.
+  const user = await findUserById(req.user!.sub);
+  if (await isCurrentPassword(parsed.data.newPassword, user?.passwordHash ?? null)) {
+    return res.status(400).json({ error: SAME_PASSWORD_MESSAGE });
+  }
   if (!(await verifyEmailCode(req.user!.sub, "CHANGE_PASSWORD", parsed.data.code))) {
     return res.status(401).json({ error: "That code is incorrect or has expired." });
   }

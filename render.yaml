@@ -4,7 +4,10 @@ services:
     runtime: node
     plan: free
     buildCommand: npm install --include=dev
-    startCommand: npm run start --workspace=apps/api
+    # Applies any new packages/db/sql migrations (already-applied ones are
+    # skipped) before the API starts, so a deploy never runs new code
+    # against an old schema.
+    startCommand: npm run db:migrate && npm run start --workspace=apps/api
     envVars:
       - key: NODE_ENV
         value: production
@@ -26,6 +29,20 @@ services:
         value: ../../storage
       - key: STORAGE_SIGNED_URL_TTL_MINUTES
         value: "10"
+      # Email for MFA + password-reset codes (see .env.example). Sign-in
+      # by emailed code fails until these are set in the Render dashboard.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_SECURE
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM
+        sync: false
 
   - type: web
     name: chs-portal-web

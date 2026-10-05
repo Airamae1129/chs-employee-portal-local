@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   Banknote,
   ClipboardList,
+  KeyRound,
 } from "lucide-react";
 import { Role } from "./types";
 
@@ -37,6 +38,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/admin/payroll", label: "Payroll", icon: Banknote, roles: ["ADMIN"] },
   { href: "/admin/users", label: "Staff Accounts", icon: Users, roles: ["ADMIN"] },
   { href: "/admin/audit-log", label: "Audit Log", icon: ShieldCheck, roles: ["ADMIN"] },
+  { href: "/account/security", label: "Account Security", icon: KeyRound, roles: ["EMPLOYEE", "MANAGER", "ADMIN"] },
 ];
 
 export function navForRole(role: Role): NavItem[] {

@@ -102,6 +102,28 @@ clock event). Swap the `fetch()` call for a Microsoft Graph
 per-team routing or threaded corrections later — the payload builder and
 retry wrapper stay the same.
 
+### Sign-in MFA and password reset
+
+Every sign-in has two steps: password, then a 6-digit code. The first
+time each account signs in (all existing accounts included), it must set
+up MFA by choosing either:
+
+- **Email code**: a code is emailed at each sign-in, or
+- **Authenticator app**: Microsoft/Google Authenticator, Authy, etc.
+  (scan the QR code shown during setup).
+
+Emailed codes always remain available as a backup, so a lost phone
+never locks anyone out. Users can switch methods or change their
+password under **Account Security** (`/account/security`); a password
+change needs a code emailed to them. "Forgot your password?" on the
+sign-in page emails a 6-digit code, which must be entered before the
+new-password form appears.
+
+Codes expire after 10 minutes, work once, and allow 5 tries; 5 wrong
+MFA codes in a row lock sign-in for 15 minutes. Emails need the
+`SMTP_*` settings in `.env` (see `.env.example`). In local dev with no
+`SMTP_HOST`, each email is printed to the API console instead.
+
 ### File storage
 
 Defaults to local disk (`storage/`) with HMAC-signed, expiring URLs served

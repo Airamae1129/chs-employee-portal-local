@@ -24,6 +24,13 @@ export interface UserTable {
   jobTitle: string | null;
   birthday: DateOnly | null;
   mustResetPassword: Generated<boolean>;
+  mfaMethod: Generated<"EMAIL" | "TOTP">;
+  mfaEnrolledAt: Timestamp | null;
+  totpSecret: string | null;
+  totpPendingSecret: string | null;
+  totpLastUsedStep: number | null;
+  mfaFailedCount: Generated<number>;
+  mfaLockedUntil: Timestamp | null;
   createdAt: Generated<Timestamp>;
   updatedAt: Generated<Timestamp>;
 }
@@ -258,6 +265,17 @@ export interface AuditLogTable {
   metadata: Json;
 }
 
+export interface EmailCodeTable {
+  id: Generated<string>;
+  userId: string;
+  purpose: "PASSWORD_RESET" | "LOGIN_MFA" | "CHANGE_PASSWORD";
+  codeHash: string;
+  attempts: Generated<number>;
+  expiresAt: Timestamp;
+  consumedAt: Timestamp | null;
+  createdAt: Generated<Timestamp>;
+}
+
 export interface Database {
   User: UserTable;
   TimeEvent: TimeEventTable;
@@ -280,4 +298,5 @@ export interface Database {
   PolicyItem: PolicyItemTable;
   Task: TaskTable;
   TaskComment: TaskCommentTable;
+  EmailCode: EmailCodeTable;
 }

@@ -1,13 +1,25 @@
+import crypto from "crypto";
 import { Router } from "express";
 import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { db } from "../db";
 import { env, isEntraConfigured } from "../env";
 import { issueSessionToken, sessionCookieMaxAgeMs, SESSION_COOKIE_NAME, verifySessionToken } from "../utils/jwt";
 import { writeAuditLog } from "../utils/audit";
 import { requireAuth } from "../middleware/auth";
+import { sendEmailCode, verifyEmailCode } from "../utils/emailCodes";
+import { maskEmail, MailNotConfiguredError } from "../utils/mailer";
+import { generateTotpSecret, matchTotpStep, totpSetupPayload } from "../utils/totp";
+import { strongPassword, STRONG_PASSWORD_MESSAGE } from "../utils/passwordPolicy";
 
 export const authRouter = Router();
+
+type UserRow = NonNullable<Awaited<ReturnType<typeof findUserById>>>;
+
+function findUserById(id: string) {
+  return db.selectFrom("User").selectAll().where("id", "=", id).executeTakeFirst();
+}
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -36,13 +48,102 @@ function setSessionCookie(res: import("express").Response, user: { id: string; r
   });
 }
 
+function publicUser(user: UserRow) {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    country: user.country,
+    jobTitle: user.jobTitle,
+    mustResetPassword: user.mustResetPassword,
+  };
+}
+
+// ---------- Short-lived challenge tokens ----------
+//
+// Between "password accepted" and "second factor accepted" (and between
+// "reset code accepted" and "new password saved") the browser holds a
+// short-lived token instead of a session. They're signed with a key
+// derived from JWT_SECRET, never the session key itself, so one can't be
+// pasted into the session cookie to skip MFA.
+
+const CHALLENGE_SECRET = crypto.createHmac("sha256", env.jwtSecret).update("chs-auth-challenge").digest();
+
+type Challenge =
+  | { kind: "mfa"; sub: string }
+  // "pwv" pins the password the reset was started against, so a reset
+  // token stops working as soon as it has been used once.
+  | { kind: "reset"; sub: string; pwv: string };
+
+function issueChallenge(claims: Challenge, minutes: number): string {
+  return jwt.sign(claims, CHALLENGE_SECRET, { expiresIn: `${minutes}m` });
+}
+
+function readChallenge<K extends Challenge["kind"]>(token: unknown, kind: K): Extract<Challenge, { kind: K }> | null {
+  if (typeof token !== "string") return null;
+  try {
+    const claims = jwt.verify(token, CHALLENGE_SECRET) as Challenge;
+    return claims.kind === kind ? (claims as Extract<Challenge, { kind: K }>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function passwordVersion(passwordHash: string | null): string {
+  return crypto.createHash("sha256").update(passwordHash ?? "").digest("hex").slice(0, 16);
+}
+
+// ---------- MFA lockout ----------
+
+const MFA_MAX_FAILURES = 5;
+const MFA_LOCK_MINUTES = 15;
+
+function mfaLockedMessage(user: UserRow): string | null {
+  if (user.mfaLockedUntil && new Date(user.mfaLockedUntil) > new Date()) {
+    return `Too many incorrect codes. Try again after ${new Date(user.mfaLockedUntil).toLocaleTimeString("en-IE", { hour: "2-digit", minute: "2-digit" })}.`;
+  }
+  return null;
+}
+
+async function recordMfaFailure(user: UserRow) {
+  const failures = user.mfaFailedCount + 1;
+  const lock = failures >= MFA_MAX_FAILURES;
+  await db
+    .updateTable("User")
+    .set({
+      mfaFailedCount: lock ? 0 : failures,
+      mfaLockedUntil: lock ? new Date(Date.now() + MFA_LOCK_MINUTES * 60 * 1000) : user.mfaLockedUntil,
+    })
+    .where("id", "=", user.id)
+    .execute();
+  await writeAuditLog({ userId: user.id, action: lock ? "MfaLockedOut" : "MfaCodeRejected" });
+}
+
+/** Sends an email code, mapping "email isn't set up" to a readable 503. */
+async function trySendEmailCode(res: import("express").Response, user: UserRow, purpose: Parameters<typeof sendEmailCode>[1]) {
+  try {
+    return await sendEmailCode(user, purpose);
+  } catch (e) {
+    if (e instanceof MailNotConfiguredError) {
+      res.status(503).json({ error: e.message });
+      return null;
+    }
+    throw e;
+  }
+}
+
+// ---------- Sign in ----------
+
 /**
  * A single sign-in page for every role (Section 4.2 revised): the
- * backend authenticates on email/password alone and issues a session
- * carrying the account's real role. The web app then routes everyone
- * to the same /dashboard shell, whose sidebar nav is already role-
- * aware (see lib/nav.ts) — an Employee, Manager, or Admin account all
- * land in the "right" portal without picking one up front.
+ * backend authenticates on email/password, then requires a second
+ * factor before issuing a session carrying the account's real role.
+ *
+ * Accounts that haven't enrolled in MFA yet (every account the first
+ * time) get stage "SETUP" and must pick email or an authenticator app;
+ * enrolled accounts get stage "VERIFY". Either way the browser gets a
+ * 10-minute mfaToken, not a session.
  */
 authRouter.post("/login", async (req, res) => {
   if (!env.allowPasswordLogin) {
@@ -74,41 +175,208 @@ authRouter.post("/login", async (req, res) => {
     return res.status(403).json({ error: "Unable to access your account. Please contact your administrator." });
   }
 
-  setSessionCookie(res, user);
-  await writeAuditLog({ userId: user.id, action: "LoginSucceeded" });
+  const locked = mfaLockedMessage(user);
+  if (locked) return res.status(429).json({ error: locked });
 
+  const enrolled = !!user.mfaEnrolledAt;
+  const method = enrolled && user.mfaMethod === "TOTP" && user.totpSecret ? "TOTP" : "EMAIL";
+
+  // Enrolled email users get their code straight away; everyone else
+  // chooses first (setup) or has an app code ready (TOTP).
+  let emailSent = false;
+  if (enrolled && method === "EMAIL") {
+    const result = await trySendEmailCode(res, user, "LOGIN_MFA");
+    if (result === null) return;
+    emailSent = true;
+  }
+
+  await writeAuditLog({ userId: user.id, action: "LoginPasswordAccepted" });
   res.json({
-    user: {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      country: user.country,
-      jobTitle: user.jobTitle,
-      mustResetPassword: user.mustResetPassword,
-    },
+    mfaRequired: true,
+    stage: enrolled ? "VERIFY" : "SETUP",
+    mfaToken: issueChallenge({ kind: "mfa", sub: user.id }, 10),
+    method,
+    totpAvailable: !!user.totpSecret,
+    maskedEmail: maskEmail(user.email),
+    emailSent,
   });
 });
 
-// 8-16 chars, at least one uppercase, one lowercase, one number, one symbol.
-const STRONG_PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,16}$/;
-const STRONG_PASSWORD_MESSAGE =
-  "Password must be 8-16 characters and include an uppercase letter, a lowercase letter, a number, and a symbol.";
+async function userFromMfaToken(req: import("express").Request, res: import("express").Response) {
+  const challenge = readChallenge(req.body?.mfaToken, "mfa");
+  if (!challenge) {
+    res.status(401).json({ error: "Your sign-in attempt expired. Please sign in again." });
+    return null;
+  }
+  const user = await findUserById(challenge.sub);
+  if (!user || user.status !== "ACTIVE") {
+    res.status(401).json({ error: "Your sign-in attempt expired. Please sign in again." });
+    return null;
+  }
+  const locked = mfaLockedMessage(user);
+  if (locked) {
+    res.status(429).json({ error: locked });
+    return null;
+  }
+  return user;
+}
 
-const setPasswordSchema = z.object({
-  newPassword: z.string().regex(STRONG_PASSWORD_REGEX, STRONG_PASSWORD_MESSAGE),
+/** POST /auth/mfa/email — send (or resend) a sign-in code by email. */
+authRouter.post("/mfa/email", async (req, res) => {
+  const user = await userFromMfaToken(req, res);
+  if (!user) return;
+  const result = await trySendEmailCode(res, user, "LOGIN_MFA");
+  if (result === null) return;
+  if (result === "throttled") {
+    return res.status(429).json({ error: "A code was just sent. Please wait a minute before requesting another." });
+  }
+  res.json({ ok: true, maskedEmail: maskEmail(user.email) });
 });
+
+/** POST /auth/mfa/totp/start — first-time setup: a new authenticator secret + QR code. */
+authRouter.post("/mfa/totp/start", async (req, res) => {
+  const user = await userFromMfaToken(req, res);
+  if (!user) return;
+  if (user.mfaEnrolledAt) {
+    return res.status(400).json({ error: "MFA is already set up. Change it from Account Security after signing in." });
+  }
+  const secret = generateTotpSecret();
+  await db.updateTable("User").set({ totpPendingSecret: secret }).where("id", "=", user.id).execute();
+  res.json(await totpSetupPayload(user.email, secret));
+});
+
+const mfaVerifySchema = z.object({
+  mfaToken: z.string(),
+  method: z.enum(["EMAIL", "TOTP"]),
+  code: z.string().min(6).max(8),
+});
+
+/**
+ * POST /auth/mfa/verify — checks the second factor and issues the session.
+ * For an account still in setup, a correct code also completes enrolment
+ * with the chosen method.
+ */
+authRouter.post("/mfa/verify", async (req, res) => {
+  const parsed = mfaVerifySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Enter the 6-digit code." });
+  const user = await userFromMfaToken(req, res);
+  if (!user) return;
+  const { method, code } = parsed.data;
+  const enrolling = !user.mfaEnrolledAt;
+
+  let ok = false;
+  let totpStep: number | null = null;
+  if (method === "EMAIL") {
+    ok = await verifyEmailCode(user.id, "LOGIN_MFA", code);
+  } else {
+    const secret = enrolling ? user.totpPendingSecret : user.totpSecret;
+    if (!secret) return res.status(400).json({ error: "Authenticator app isn't set up for this account." });
+    totpStep = matchTotpStep(code, secret);
+    ok = totpStep !== null && (user.totpLastUsedStep === null || totpStep > user.totpLastUsedStep);
+  }
+
+  if (!ok) {
+    await recordMfaFailure(user);
+    return res.status(401).json({ error: "That code is incorrect or has expired." });
+  }
+
+  await db
+    .updateTable("User")
+    .set({
+      mfaFailedCount: 0,
+      mfaLockedUntil: null,
+      ...(totpStep !== null ? { totpLastUsedStep: totpStep } : {}),
+      ...(enrolling
+        ? {
+            mfaEnrolledAt: new Date(),
+            mfaMethod: method,
+            ...(method === "TOTP" ? { totpSecret: user.totpPendingSecret, totpPendingSecret: null } : {}),
+          }
+        : {}),
+    })
+    .where("id", "=", user.id)
+    .execute();
+
+  setSessionCookie(res, user);
+  await writeAuditLog({ userId: user.id, action: enrolling ? "MfaEnrolled" : "LoginSucceeded", metadata: { method } });
+  res.json({ user: publicUser(user) });
+});
+
+// ---------- Account security (signed in) ----------
+
+/** GET /auth/security — the signed-in user's MFA settings. */
+authRouter.get("/security", requireAuth, async (req, res) => {
+  const user = await findUserById(req.user!.sub);
+  if (!user) return res.status(404).json({ error: "User not found" });
+  res.json({
+    mfaMethod: user.mfaMethod,
+    mfaEnrolledAt: user.mfaEnrolledAt,
+    totpEnabled: !!user.totpSecret,
+    maskedEmail: maskEmail(user.email),
+  });
+});
+
+/** POST /auth/security/totp/start — begin (re)linking an authenticator app. */
+authRouter.post("/security/totp/start", requireAuth, async (req, res) => {
+  const user = await findUserById(req.user!.sub);
+  if (!user) return res.status(404).json({ error: "User not found" });
+  const secret = generateTotpSecret();
+  await db.updateTable("User").set({ totpPendingSecret: secret }).where("id", "=", user.id).execute();
+  res.json(await totpSetupPayload(user.email, secret));
+});
+
+/** POST /auth/security/totp/confirm — a valid app code makes it the sign-in method. */
+authRouter.post("/security/totp/confirm", requireAuth, async (req, res) => {
+  const code = z.string().min(6).max(8).safeParse(req.body?.code);
+  if (!code.success) return res.status(400).json({ error: "Enter the 6-digit code from your app." });
+  const user = await findUserById(req.user!.sub);
+  if (!user?.totpPendingSecret) return res.status(400).json({ error: "Start authenticator setup first." });
+  const step = matchTotpStep(code.data, user.totpPendingSecret);
+  if (step === null) return res.status(400).json({ error: "That code is incorrect. Check your app and try again." });
+  await db
+    .updateTable("User")
+    .set({ totpSecret: user.totpPendingSecret, totpPendingSecret: null, totpLastUsedStep: step, mfaMethod: "TOTP", mfaEnrolledAt: user.mfaEnrolledAt ?? new Date() })
+    .where("id", "=", user.id)
+    .execute();
+  await writeAuditLog({ userId: user.id, action: "MfaAuthenticatorLinked" });
+  res.json({ ok: true });
+});
+
+/** POST /auth/security/use-email — switch to emailed codes (removes the app link). Needs the password. */
+authRouter.post("/security/use-email", requireAuth, async (req, res) => {
+  const password = z.string().min(1).safeParse(req.body?.password);
+  if (!password.success) return res.status(400).json({ error: "Enter your current password." });
+  const user = await findUserById(req.user!.sub);
+  if (!user?.passwordHash || !(await bcrypt.compare(password.data, user.passwordHash))) {
+    return res.status(401).json({ error: "Current password is incorrect." });
+  }
+  await db
+    .updateTable("User")
+    .set({ mfaMethod: "EMAIL", totpSecret: null, totpPendingSecret: null, totpLastUsedStep: null })
+    .where("id", "=", user.id)
+    .execute();
+  await writeAuditLog({ userId: user.id, action: "MfaSwitchedToEmail" });
+  res.json({ ok: true });
+});
+
+// ---------- Passwords ----------
+
+const setPasswordSchema = z.object({ newPassword: strongPassword });
 
 /**
  * POST /auth/set-password — first-login forced reset (Staff Accounts:
  * "enter temporary password, then must enter New Password and Confirm
- * Password"). Requires an authenticated session (the temp password
- * already got them one), so this doubles as a general change-password
- * endpoint too.
+ * Password"). Only for accounts still on a temporary password; everyone
+ * else changes it through /auth/password/change, which needs an email code.
  */
 authRouter.post("/set-password", requireAuth, async (req, res) => {
   const parsed = setPasswordSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? STRONG_PASSWORD_MESSAGE });
+
+  const user = await findUserById(req.user!.sub);
+  if (!user?.mustResetPassword) {
+    return res.status(400).json({ error: "Use Change Password under Account Security instead." });
+  }
 
   const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
   await db
@@ -117,6 +385,83 @@ authRouter.post("/set-password", requireAuth, async (req, res) => {
     .where("id", "=", req.user!.sub)
     .execute();
   await writeAuditLog({ userId: req.user!.sub, action: "PasswordSetByUser" });
+  res.json({ ok: true });
+});
+
+/**
+ * Forgot password, step 1 — POST /auth/password/forgot { email }.
+ * Always answers the same way, so it can't reveal which emails have accounts.
+ */
+authRouter.post("/password/forgot", async (req, res) => {
+  const email = z.string().email().safeParse(req.body?.email);
+  if (!email.success) return res.status(400).json({ error: "Enter a valid email address." });
+  const user = await db.selectFrom("User").selectAll().where("email", "=", email.data.toLowerCase()).executeTakeFirst();
+  if (user && user.status === "ACTIVE") {
+    const result = await trySendEmailCode(res, user, "PASSWORD_RESET");
+    if (result === null) return;
+    if (result === "sent") await writeAuditLog({ userId: user.id, action: "PasswordResetRequested" });
+  }
+  res.json({ ok: true });
+});
+
+/** Forgot password, step 2 — POST /auth/password/verify-code { email, code } → resetToken. */
+authRouter.post("/password/verify-code", async (req, res) => {
+  const parsed = z.object({ email: z.string().email(), code: z.string().min(6).max(8) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Enter your email and the 6-digit code." });
+  const user = await db.selectFrom("User").selectAll().where("email", "=", parsed.data.email.toLowerCase()).executeTakeFirst();
+  if (!user || user.status !== "ACTIVE" || !(await verifyEmailCode(user.id, "PASSWORD_RESET", parsed.data.code))) {
+    return res.status(401).json({ error: "That code is incorrect or has expired." });
+  }
+  res.json({ resetToken: issueChallenge({ kind: "reset", sub: user.id, pwv: passwordVersion(user.passwordHash) }, 15) });
+});
+
+/** Forgot password, step 3 — POST /auth/password/reset { resetToken, newPassword }. */
+authRouter.post("/password/reset", async (req, res) => {
+  const challenge = readChallenge(req.body?.resetToken, "reset");
+  if (!challenge) return res.status(401).json({ error: "This reset link has expired. Please request a new code." });
+  const parsed = setPasswordSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? STRONG_PASSWORD_MESSAGE });
+
+  const user = await findUserById(challenge.sub);
+  if (!user || user.status !== "ACTIVE" || passwordVersion(user.passwordHash) !== challenge.pwv) {
+    return res.status(401).json({ error: "This reset link has expired. Please request a new code." });
+  }
+  const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
+  await db
+    .updateTable("User")
+    .set({ passwordHash, mustResetPassword: false, updatedAt: new Date() })
+    .where("id", "=", user.id)
+    .execute();
+  await writeAuditLog({ userId: user.id, action: "PasswordResetCompleted" });
+  res.json({ ok: true });
+});
+
+/** Change password (signed in), step 1 — email a confirmation code. */
+authRouter.post("/password/change/send-code", requireAuth, async (req, res) => {
+  const user = await findUserById(req.user!.sub);
+  if (!user) return res.status(404).json({ error: "User not found" });
+  const result = await trySendEmailCode(res, user, "CHANGE_PASSWORD");
+  if (result === null) return;
+  if (result === "throttled") {
+    return res.status(429).json({ error: "A code was just sent. Please wait a minute before requesting another." });
+  }
+  res.json({ ok: true, maskedEmail: maskEmail(user.email) });
+});
+
+/** Change password (signed in), step 2 — { code, newPassword }. */
+authRouter.post("/password/change", requireAuth, async (req, res) => {
+  const parsed = z.object({ code: z.string().min(6).max(8), newPassword: strongPassword }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Enter the code and a new password." });
+  if (!(await verifyEmailCode(req.user!.sub, "CHANGE_PASSWORD", parsed.data.code))) {
+    return res.status(401).json({ error: "That code is incorrect or has expired." });
+  }
+  const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
+  await db
+    .updateTable("User")
+    .set({ passwordHash, mustResetPassword: false, updatedAt: new Date() })
+    .where("id", "=", req.user!.sub)
+    .execute();
+  await writeAuditLog({ userId: req.user!.sub, action: "PasswordChangedByUser" });
   res.json({ ok: true });
 });
 

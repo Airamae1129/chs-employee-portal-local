@@ -36,6 +36,17 @@ export const env = {
     redirectUri: process.env.ENTRA_REDIRECT_URI ?? "",
   },
 
+  // Outgoing email (sign-in and password-reset codes). With no SMTP_HOST,
+  // local dev prints each email to the API console instead of sending it.
+  mail: {
+    host: process.env.SMTP_HOST ?? "",
+    port: parseInt(process.env.SMTP_PORT ?? "587", 10),
+    secure: (process.env.SMTP_SECURE ?? "false") === "true",
+    user: process.env.SMTP_USER ?? "",
+    pass: process.env.SMTP_PASS ?? "",
+    from: process.env.MAIL_FROM ?? "CHS Employee Portal <no-reply@cyberhealth.ie>",
+  },
+
   teams: {
     webhookUrl: process.env.TEAMS_WEBHOOK_URL ?? "",
     portalBaseUrl: process.env.PORTAL_BASE_URL ?? "http://localhost:3000",

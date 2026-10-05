@@ -26,6 +26,20 @@ services:
         value: ../../storage
       - key: STORAGE_SIGNED_URL_TTL_MINUTES
         value: "10"
+      # Email for MFA + password-reset codes (see .env.example). Sign-in
+      # by emailed code fails until these are set in the Render dashboard.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_SECURE
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM
+        sync: false
 
   - type: web
     name: chs-portal-web

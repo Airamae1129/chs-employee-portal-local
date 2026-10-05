@@ -69,7 +69,7 @@ async function main() {
 
   const admin = await createUser({
     name: "Admin",
-    email: "admin@cyberhealth.ie",
+    email: "aira@cyberhealth.ie",
     role: "ADMIN",
     country: "IRELAND",
     jobTitle: "Administrator",
@@ -162,7 +162,7 @@ async function main() {
   console.log("----------------------------------------------------");
   console.log("Seeded accounts — TEMPORARY password, must be changed on first login:");
   console.log(`  temporary password: ${DEV_PASSWORD}`);
-  console.log(`  admin:    admin@cyberhealth.ie`);
+  console.log(`  admin:    aira@cyberhealth.ie`);
   console.log(`  manager:  manager@cyberhealth.ie`);
   console.log(`  employee: employee@cyberhealth.ie`);
   console.log("----------------------------------------------------");

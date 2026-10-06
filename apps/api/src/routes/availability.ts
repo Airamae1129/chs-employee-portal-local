@@ -45,6 +45,10 @@ const allocationSchema = z.object({
 availabilityRouter.post("/", allow("MANAGER", "ADMIN"), async (req, res) => {
   const parsed = allocationSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid allocation payload" });
+  const scope = await scopedUserIds(req.user!);
+  if (scope !== "ALL" && !scope.includes(parsed.data.userId)) {
+    return res.status(403).json({ error: "You can only allocate your own team" });
+  }
 
   const allocation = await db.insertInto("ResourceAllocation").values(parsed.data).returningAll().executeTakeFirstOrThrow();
   res.status(201).json({ allocation });

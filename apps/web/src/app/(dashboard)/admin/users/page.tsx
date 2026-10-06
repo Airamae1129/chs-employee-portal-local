@@ -5,35 +5,54 @@ import { Plus, Pencil, KeyRound, UserX, UserCheck, Save, UserPlus } from "lucide
 import { PageHeader, Card, Badge } from "@/components/PageHeader";
 import { Button } from "@/components/Button";
 import { apiFetch } from "@/lib/api";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 import { notifySuccess, notifyError } from "@/lib/alerts";
+
+type Role = "EMPLOYEE" | "MANAGER" | "ADMIN" | "PAYROLL";
 
 interface StaffUser {
   id: string;
   name: string;
   email: string;
-  role: "EMPLOYEE" | "MANAGER" | "ADMIN";
+  role: Role;
   country: "IRELAND" | "PHILIPPINES";
   status: "ACTIVE" | "INACTIVE";
   jobTitle?: string;
-  salary?: string | null;
-  salaryCurrency?: string | null;
   managerId?: string | null;
   manager?: { name: string } | null;
+  leaveAllowanceDays: number;
+  locked: boolean;
 }
 
-const CURRENCY_SYMBOL: Record<string, string> = { EUR: "€", PHP: "₱" };
+const ROLE_LABEL: Record<Role, string> = { EMPLOYEE: "Employee", MANAGER: "Manager", ADMIN: "Admin", PAYROLL: "Payroll" };
 
 function emptyForm() {
-  return { name: "", email: "", role: "EMPLOYEE" as StaffUser["role"], country: "IRELAND" as StaffUser["country"], jobTitle: "", salary: "", managerId: "", tempPassword: "" };
+  return {
+    name: "",
+    email: "",
+    role: "EMPLOYEE" as Role,
+    country: "IRELAND" as StaffUser["country"],
+    jobTitle: "",
+    managerId: "",
+    leaveAllowanceDays: "12",
+    tempPassword: "",
+  };
 }
 
+/**
+ * Admin: staff accounts. Salaries aren't shown or set here — that's the
+ * Payroll role's job (Payroll page). Admins can't change their own role,
+ * status or leave allowance; another Admin has to.
+ */
 export default function AdminUsersPage() {
+  const { user: me } = useCurrentUser();
   const [users, setUsers] = useState<StaffUser[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<StaffUser | null>(null);
   const [resetTarget, setResetTarget] = useState<StaffUser | null>(null);
   const [newPassword, setNewPassword] = useState("");
   const [form, setForm] = useState(emptyForm());
+  const editingSelf = !!editing && editing.id === me?.id;
 
   function refresh() {
     apiFetch<{ users: StaffUser[] }>("/users").then(({ users }) => setUsers(users));
@@ -50,8 +69,8 @@ export default function AdminUsersPage() {
           role: form.role,
           country: form.country,
           jobTitle: form.jobTitle || undefined,
-          salary: form.salary ? Number(form.salary) : undefined,
           managerId: form.managerId || undefined,
+          leaveAllowanceDays: form.leaveAllowanceDays === "" ? undefined : Number(form.leaveAllowanceDays),
           temporaryPassword: form.tempPassword,
         }),
       });
@@ -72,8 +91,8 @@ export default function AdminUsersPage() {
       role: u.role,
       country: u.country,
       jobTitle: u.jobTitle ?? "",
-      salary: u.salary ?? "",
       managerId: u.managerId ?? "",
+      leaveAllowanceDays: String(u.leaveAllowanceDays),
       tempPassword: "",
     });
   }
@@ -86,11 +105,10 @@ export default function AdminUsersPage() {
         body: JSON.stringify({
           name: form.name,
           email: form.email,
-          role: form.role,
           country: form.country,
           jobTitle: form.jobTitle || undefined,
-          salary: form.salary ? Number(form.salary) : undefined,
           managerId: form.managerId || undefined,
+          ...(editingSelf ? {} : { role: form.role, leaveAllowanceDays: Number(form.leaveAllowanceDays) }),
         }),
       });
       setEditing(null);
@@ -102,83 +120,93 @@ export default function AdminUsersPage() {
   }
 
   async function toggleStatus(u: StaffUser) {
-    await apiFetch(`/users/${u.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ status: u.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" }),
-    });
-    refresh();
+    try {
+      await apiFetch(`/users/${u.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: u.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" }),
+      });
+      refresh();
+    } catch (e) {
+      notifyError("Couldn't change status", e instanceof Error ? e.message : undefined);
+    }
   }
 
   async function resetPassword() {
     if (!resetTarget) return;
-    await apiFetch(`/users/${resetTarget.id}/reset-password`, {
-      method: "POST",
-      body: JSON.stringify({ newPassword }),
-    });
-    setResetTarget(null);
-    setNewPassword("");
-    notifySuccess("Password reset", "They'll be asked to set a new password on next login.");
+    try {
+      await apiFetch(`/users/${resetTarget.id}/reset-password`, {
+        method: "POST",
+        body: JSON.stringify({ newPassword }),
+      });
+      setResetTarget(null);
+      setNewPassword("");
+      refresh();
+      notifySuccess("Password reset", "They'll be asked to set a new password on next login. A locked account is unlocked.");
+    } catch (e) {
+      notifyError("Couldn't reset password", e instanceof Error ? e.message : undefined);
+    }
   }
+
+  const inputClass = "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal disabled:bg-gray-50 disabled:text-gray-400";
 
   const formFields = (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
       <div>
         <label className="mb-1 block text-sm font-medium text-chs-charcoal">Full name</label>
-        <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal" />
+        <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputClass} />
       </div>
       <div>
         <label className="mb-1 block text-sm font-medium text-chs-charcoal">Email</label>
-        <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal" />
+        <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className={inputClass} />
       </div>
       <div>
         <label className="mb-1 block text-sm font-medium text-chs-charcoal">Role</label>
-        <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as StaffUser["role"] })} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal">
+        <select value={form.role} disabled={editingSelf} onChange={(e) => setForm({ ...form, role: e.target.value as Role })} className={inputClass}>
           <option value="EMPLOYEE">Employee</option>
           <option value="MANAGER">Manager</option>
           <option value="ADMIN">Admin</option>
+          <option value="PAYROLL">Payroll</option>
         </select>
+        {editingSelf && <p className="mt-1 text-xs text-gray-400">Another Admin has to change your role.</p>}
       </div>
       <div>
         <label className="mb-1 block text-sm font-medium text-chs-charcoal">Country</label>
-        <select value={form.country} onChange={(e) => setForm({ ...form, country: e.target.value as StaffUser["country"] })} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal">
+        <select value={form.country} onChange={(e) => setForm({ ...form, country: e.target.value as StaffUser["country"] })} className={inputClass}>
           <option value="IRELAND">Ireland</option>
           <option value="PHILIPPINES">Philippines</option>
         </select>
       </div>
       <div>
         <label className="mb-1 block text-sm font-medium text-chs-charcoal">Job title</label>
-        <input value={form.jobTitle} onChange={(e) => setForm({ ...form, jobTitle: e.target.value })} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal" />
+        <input value={form.jobTitle} onChange={(e) => setForm({ ...form, jobTitle: e.target.value })} className={inputClass} />
       </div>
       <div>
-        <label className="mb-1 block text-sm font-medium text-chs-charcoal">
-          Salary ({form.country === "IRELAND" ? "EUR" : "PHP"} / month)
-        </label>
+        <label className="mb-1 block text-sm font-medium text-chs-charcoal">Paid leave allowance (days / year)</label>
         <input
           type="number"
           min={0}
-          value={form.salary}
-          onChange={(e) => setForm({ ...form, salary: e.target.value })}
-          placeholder="e.g. 50000"
-          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal"
+          max={365}
+          disabled={editingSelf}
+          value={form.leaveAllowanceDays}
+          onChange={(e) => setForm({ ...form, leaveAllowanceDays: e.target.value })}
+          className={inputClass}
         />
+        {editingSelf && <p className="mt-1 text-xs text-gray-400">Another Admin has to adjust your allowance.</p>}
       </div>
       {form.role !== "ADMIN" && (
         <div>
           <label className="mb-1 block text-sm font-medium text-chs-charcoal">Manager</label>
-          <select
-            value={form.managerId}
-            onChange={(e) => setForm({ ...form, managerId: e.target.value })}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal"
-          >
+          <select value={form.managerId} onChange={(e) => setForm({ ...form, managerId: e.target.value })} className={inputClass}>
             <option value="">— No manager —</option>
             {users
               .filter((u) => (u.role === "MANAGER" || u.role === "ADMIN") && u.id !== editing?.id)
               .map((u) => (
                 <option key={u.id} value={u.id}>
-                  {u.name} ({u.role === "ADMIN" ? "Admin" : "Manager"})
+                  {u.name} ({ROLE_LABEL[u.role]})
                 </option>
               ))}
           </select>
+          <p className="mt-1 text-xs text-gray-400">Approves their requests and time corrections.</p>
         </div>
       )}
       {!editing && (
@@ -188,7 +216,7 @@ export default function AdminUsersPage() {
             value={form.tempPassword}
             onChange={(e) => setForm({ ...form, tempPassword: e.target.value })}
             placeholder="At least 8 characters — they'll set their own on first login"
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal"
+            className={inputClass}
           />
         </div>
       )}
@@ -228,50 +256,62 @@ export default function AdminUsersPage() {
                 <th className="py-2">Role</th>
                 <th className="py-2">Country</th>
                 <th className="py-2">Job title</th>
-                <th className="py-2">Salary</th>
+                <th className="py-2">Leave / yr</th>
                 <th className="py-2">Manager</th>
                 <th className="py-2">Status</th>
                 <th className="py-2" />
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => (
-                <tr key={u.id} className="border-b border-gray-50">
-                  <td className="py-2.5">{u.name}</td>
-                  <td className="py-2.5 text-gray-500">{u.email}</td>
-                  <td className="py-2.5">{u.role}</td>
-                  <td className="py-2.5">{u.country}</td>
-                  <td className="py-2.5 text-gray-500">{u.jobTitle ?? "—"}</td>
-                  <td className="py-2.5 text-gray-500">
-                    {u.salary ? `${CURRENCY_SYMBOL[u.salaryCurrency ?? ""] ?? ""}${Number(u.salary).toLocaleString()}` : "—"}
-                  </td>
-                  <td className="py-2.5 text-gray-500">{u.manager?.name ?? "—"}</td>
-                  <td className="py-2.5">
-                    <Badge tone={u.status === "ACTIVE" ? "green" : "red"}>{u.status}</Badge>
-                  </td>
-                  <td className="py-2.5 text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      <Button size="sm" variant="secondary" icon={<Pencil size={12} />} onClick={() => openEdit(u)}>
-                        Edit
-                      </Button>
-                      <Button size="sm" variant="secondary" icon={<KeyRound size={12} />} onClick={() => setResetTarget(u)}>
-                        Reset password
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={u.status === "ACTIVE" ? "destructive" : "success"}
-                        icon={u.status === "ACTIVE" ? <UserX size={12} /> : <UserCheck size={12} />}
-                        onClick={() => toggleStatus(u)}
-                      >
-                        {u.status === "ACTIVE" ? "Deactivate" : "Reactivate"}
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {users.map((u) => {
+                const self = u.id === me?.id;
+                return (
+                  <tr key={u.id} className="border-b border-gray-50">
+                    <td className="py-2.5">
+                      {u.name}
+                      {self && <span className="ml-1.5 text-xs text-gray-400">(you)</span>}
+                    </td>
+                    <td className="py-2.5 text-gray-500">{u.email}</td>
+                    <td className="py-2.5">{ROLE_LABEL[u.role]}</td>
+                    <td className="py-2.5">{u.country}</td>
+                    <td className="py-2.5 text-gray-500">{u.jobTitle ?? "—"}</td>
+                    <td className="py-2.5 text-gray-500">{u.leaveAllowanceDays}</td>
+                    <td className="py-2.5 text-gray-500">{u.manager?.name ?? "—"}</td>
+                    <td className="py-2.5">
+                      <div className="flex flex-wrap gap-1">
+                        <Badge tone={u.status === "ACTIVE" ? "green" : "red"}>{u.status}</Badge>
+                        {u.locked && <Badge tone="red">LOCKED</Badge>}
+                      </div>
+                    </td>
+                    <td className="py-2.5 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <Button size="sm" variant="secondary" icon={<Pencil size={12} />} onClick={() => openEdit(u)}>
+                          Edit
+                        </Button>
+                        {!self && (
+                          <>
+                            <Button size="sm" variant="secondary" icon={<KeyRound size={12} />} onClick={() => setResetTarget(u)}>
+                              {u.locked ? "Unlock & reset" : "Reset password"}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant={u.status === "ACTIVE" ? "destructive" : "success"}
+                              icon={u.status === "ACTIVE" ? <UserX size={12} /> : <UserCheck size={12} />}
+                              onClick={() => toggleStatus(u)}
+                            >
+                              {u.status === "ACTIVE" ? "Deactivate" : "Reactivate"}
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
+        <p className="mt-3 text-xs text-gray-400">Salaries are managed by the Payroll role. Review roles whenever staff join, move or leave.</p>
       </Card>
 
       {editing && (

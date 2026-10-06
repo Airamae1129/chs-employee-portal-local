@@ -4,7 +4,7 @@ import { z } from "zod";
 import { db } from "../db";
 import { requireAuth } from "../middleware/auth";
 import { allow } from "../middleware/rbac";
-import { scopedUserIds } from "../utils/team";
+import { approvalScope, canActFor, OWN_APPROVAL_MESSAGE, scopedUserIds } from "../utils/team";
 import { writeAuditLog } from "../utils/audit";
 import { getStorageAdapter } from "../utils/storage";
 import { computeLeaveBalance } from "../utils/leave";
@@ -72,6 +72,33 @@ hrRequestsRouter.get("/me", async (req, res) => {
   res.json({ requests });
 });
 
+/** POST /hr-requests/:id/cancel — withdraw your own request while it's still pending. */
+hrRequestsRouter.post("/:id/cancel", async (req, res) => {
+  const existing = await db.selectFrom("HRRequest").selectAll().where("id", "=", req.params.id).executeTakeFirst();
+  if (!existing || existing.employeeId !== req.user!.sub) return res.status(404).json({ error: "Request not found" });
+  if (existing.status !== "SUBMITTED") return res.status(400).json({ error: "Only pending requests can be cancelled" });
+
+  const request = await db
+    .updateTable("HRRequest")
+    .set({ status: "CANCELLED", updatedAt: new Date() })
+    .where("id", "=", existing.id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+  // Drop the placeholder leave marker the request put on the calendar.
+  if (existing.requestType === "LEAVE" && existing.startDate) {
+    await db
+      .deleteFrom("CalendarEntry")
+      .where("userId", "=", existing.employeeId)
+      .where("date", "=", existing.startDate)
+      .where("entryType", "=", "LEAVE")
+      .where("source", "=", "SYSTEM")
+      .where("title", "like", "Leave request (%")
+      .execute();
+  }
+  await writeAuditLog({ userId: req.user!.sub, action: "HRRequestCancelled", targetId: existing.id });
+  res.json({ request });
+});
+
 /**
  * GET /hr-requests/leave-balance — own 12-paid-leave-days-per-year
  * balance (Dashboard + HR Requests revision). Only reduces once a
@@ -96,11 +123,16 @@ hrRequestsRouter.get("/leave-balance/team", allow("MANAGER", "ADMIN"), async (re
   res.json({ balances });
 });
 
-/** GET /hr-requests/team — Manager (own reports, pending + decided) / Admin (all + escalations) */
+/**
+ * GET /hr-requests/team — requests the caller may decide: a Manager's
+ * direct reports, or everyone else's for an Admin. Never the caller's own
+ * (those are under GET /me and are decided by someone else).
+ */
 hrRequestsRouter.get("/team", allow("MANAGER", "ADMIN"), async (req, res) => {
-  const scope = await scopedUserIds(req.user!);
-  let query = db.selectFrom("HRRequest").selectAll();
-  if (scope !== "ALL") query = query.where("employeeId", "in", scope);
+  const scope = await approvalScope(req.user!);
+  if (Array.isArray(scope) && scope.length === 0) return res.json({ requests: [] });
+  let query = db.selectFrom("HRRequest").selectAll().where("employeeId", "!=", req.user!.sub);
+  if (scope !== "OTHERS") query = query.where("employeeId", "in", scope);
   const requests = await query.orderBy("submissionDate", "desc").execute();
 
   const employeeIds = [...new Set(requests.map((r) => r.employeeId))];
@@ -117,7 +149,7 @@ const decisionSchema = z.object({
   comments: z.string().optional(),
 });
 
-/** PATCH /hr-requests/:id/decision — Manager approves/rejects own team; Admin any (escalations). */
+/** PATCH /hr-requests/:id/decision — Manager approves/rejects their direct reports'; Admin anyone else's. Never your own. */
 hrRequestsRouter.patch("/:id/decision", allow("MANAGER", "ADMIN"), async (req, res) => {
   const parsed = decisionSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "decision (APPROVED|REJECTED) is required" });
@@ -125,12 +157,11 @@ hrRequestsRouter.patch("/:id/decision", allow("MANAGER", "ADMIN"), async (req, r
   const existing = await db.selectFrom("HRRequest").selectAll().where("id", "=", req.params.id).executeTakeFirst();
   if (!existing) return res.status(404).json({ error: "Request not found" });
 
-  if (req.user!.role === "MANAGER") {
-    const scope = await scopedUserIds(req.user!);
-    if (scope !== "ALL" && !scope.includes(existing.employeeId)) {
-      return res.status(403).json({ error: "You can only decide on requests from your own team" });
-    }
+  if (existing.employeeId === req.user!.sub) return res.status(403).json({ error: OWN_APPROVAL_MESSAGE });
+  if (!(await canActFor(req.user!, existing.employeeId))) {
+    return res.status(403).json({ error: "You can only decide on requests from your own team" });
   }
+  if (existing.status !== "SUBMITTED") return res.status(400).json({ error: "This request has already been decided or cancelled" });
 
   const updated = await db
     .updateTable("HRRequest")
@@ -146,7 +177,7 @@ hrRequestsRouter.patch("/:id/decision", allow("MANAGER", "ADMIN"), async (req, r
 
   await writeAuditLog({
     userId: req.user!.sub,
-    action: "RequestApproved",
+    action: parsed.data.decision === "APPROVED" ? "RequestApproved" : "RequestRejected",
     targetId: updated.id,
     metadata: { decision: parsed.data.decision },
   });
@@ -155,21 +186,17 @@ hrRequestsRouter.patch("/:id/decision", allow("MANAGER", "ADMIN"), async (req, r
 });
 
 /**
- * POST /hr-requests/:id/upload — Manager/Admin attaches the fulfilling
- * document (Certificate of Employment, HR Letter) so the employee can
- * view/download it (HR Requests revision).
+ * POST /hr-requests/:id/upload — Admin issues the fulfilling document
+ * (Certificate of Employment, HR Letter) so the employee can view/download
+ * it. Roles table: "Issue COE / HR letters" is Admin only, and not for
+ * their own request.
  */
-hrRequestsRouter.post("/:id/upload", allow("MANAGER", "ADMIN"), upload.single("file"), async (req, res) => {
+hrRequestsRouter.post("/:id/upload", allow("ADMIN"), upload.single("file"), async (req, res) => {
   const existing = await db.selectFrom("HRRequest").selectAll().where("id", "=", req.params.id).executeTakeFirst();
   if (!existing) return res.status(404).json({ error: "Request not found" });
   if (!req.file) return res.status(400).json({ error: "A file upload is required" });
 
-  if (req.user!.role === "MANAGER") {
-    const scope = await scopedUserIds(req.user!);
-    if (scope !== "ALL" && !scope.includes(existing.employeeId)) {
-      return res.status(403).json({ error: "You can only upload documents for your own team" });
-    }
-  }
+  if (existing.employeeId === req.user!.sub) return res.status(403).json({ error: OWN_APPROVAL_MESSAGE });
 
   const fileKey = `hr-requests/${existing.id}/${Date.now()}-${req.file.originalname}`;
   await getStorageAdapter().putObject(fileKey, req.file.buffer, req.file.mimetype);
@@ -180,7 +207,7 @@ hrRequestsRouter.post("/:id/upload", allow("MANAGER", "ADMIN"), upload.single("f
     .where("id", "=", existing.id)
     .returningAll()
     .executeTakeFirstOrThrow();
-  await writeAuditLog({ userId: req.user!.sub, action: "HRRequestDocumentUploaded", targetId: existing.id });
+  await writeAuditLog({ userId: req.user!.sub, action: "HRDocumentIssued", targetId: existing.id });
   res.status(201).json({ request: updated });
 });
 

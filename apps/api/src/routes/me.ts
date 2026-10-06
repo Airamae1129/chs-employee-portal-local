@@ -19,3 +19,13 @@ meRouter.get("/", requireAuth, async (req, res) => {
 
   res.json({ user: { ...user, manager: manager ?? null } });
 });
+
+/** GET /me/salary — your own salary settings (every role may view their own; nobody else's here). */
+meRouter.get("/salary", requireAuth, async (req, res) => {
+  const salary = await db
+    .selectFrom("SalaryConfig")
+    .select(["salaryType", "baseRate", "allowances", "currency", "updatedAt"])
+    .where("userId", "=", req.user!.sub)
+    .executeTakeFirst();
+  res.json({ salary: salary ?? null });
+});

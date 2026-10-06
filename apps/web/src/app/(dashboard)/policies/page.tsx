@@ -182,14 +182,19 @@ export default function PoliciesPage() {
   const canSaveItem =
     !!itemTitle.trim() && (editingItem ? (editingItem.hasFile ? true : !!itemLink.trim()) : itemMode === "file" ? !!itemFile : !!itemLink.trim());
 
+  // Roles table: everyone reads policies; only Admin adds, edits or deletes them (enforced server-side too).
+  const canManage = user.role === "ADMIN";
+
   return (
     <div>
       <PageHeader
         title="Policies & Templates"
         action={
-          <Button icon={<Plus size={16} />} onClick={() => setShowAddFolder(true)}>
-            Add folder
-          </Button>
+          canManage ? (
+            <Button icon={<Plus size={16} />} onClick={() => setShowAddFolder(true)}>
+              Add folder
+            </Button>
+          ) : undefined
         }
       />
 
@@ -219,12 +224,16 @@ export default function PoliciesPage() {
                       Acknowledge
                     </Button>
                   )}
-                  <button onClick={() => setEditingFolder(p)} className="text-gray-400 hover:text-chs-gold" aria-label="Edit folder">
-                    <Pencil size={15} />
-                  </button>
-                  <button onClick={() => removeFolder(p)} className="text-gray-400 hover:text-red-500" aria-label="Delete folder">
-                    <Trash2 size={15} />
-                  </button>
+                  {canManage && (
+                    <>
+                      <button onClick={() => setEditingFolder(p)} className="text-gray-400 hover:text-chs-gold" aria-label="Edit folder">
+                        <Pencil size={15} />
+                      </button>
+                      <button onClick={() => removeFolder(p)} className="text-gray-400 hover:text-red-500" aria-label="Delete folder">
+                        <Trash2 size={15} />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -243,21 +252,25 @@ export default function PoliciesPage() {
                             <div className="truncate text-xs text-gray-400">{item.description || item.fileName}</div>
                           )}
                         </div>
-                        <div className="flex shrink-0 items-center gap-3">
-                          <button onClick={() => openItemForm(p.id, item)} className="text-gray-400 hover:text-chs-gold" aria-label="Edit document">
-                            <Pencil size={14} />
-                          </button>
-                          <button onClick={() => removeItem(p.id, item)} className="text-gray-400 hover:text-red-500" aria-label="Delete document">
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
+                        {canManage && (
+                          <div className="flex shrink-0 items-center gap-3">
+                            <button onClick={() => openItemForm(p.id, item)} className="text-gray-400 hover:text-chs-gold" aria-label="Edit document">
+                              <Pencil size={14} />
+                            </button>
+                            <button onClick={() => removeItem(p.id, item)} className="text-gray-400 hover:text-red-500" aria-label="Delete document">
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        )}
                       </div>
                     ))}
                     {p.items.length === 0 && <div className="text-sm text-gray-400">No documents in this folder yet.</div>}
                   </div>
-                  <Button size="sm" variant="secondary" icon={<Plus size={14} />} className="mt-3" onClick={() => openItemForm(p.id)}>
-                    Add document
-                  </Button>
+                  {canManage && (
+                    <Button size="sm" variant="secondary" icon={<Plus size={14} />} className="mt-3" onClick={() => openItemForm(p.id)}>
+                      Add document
+                    </Button>
+                  )}
                 </div>
               )}
             </Card>

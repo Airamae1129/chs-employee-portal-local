@@ -31,6 +31,9 @@ export interface UserTable {
   totpLastUsedStep: number | null;
   mfaFailedCount: Generated<number>;
   mfaLockedUntil: Timestamp | null;
+  leaveAllowanceDays: Generated<number>;
+  failedLoginCount: Generated<number>;
+  loginLockedUntil: Timestamp | null;
   createdAt: Generated<Timestamp>;
   updatedAt: Generated<Timestamp>;
 }
@@ -276,6 +279,22 @@ export interface EmailCodeTable {
   createdAt: Generated<Timestamp>;
 }
 
+export interface TimeCorrectionRequestTable {
+  id: Generated<string>;
+  userId: string;
+  action: "ADD" | "EDIT" | "DELETE";
+  timeEventId: string | null;
+  eventType: E.TimeEventType | null;
+  requestedTimestamp: Timestamp | null;
+  originalTimestamp: Timestamp | null;
+  reason: string;
+  status: Generated<"SUBMITTED" | "APPROVED" | "REJECTED" | "CANCELLED">;
+  decidedById: string | null;
+  decidedAt: Timestamp | null;
+  decisionNote: string | null;
+  createdAt: Generated<Timestamp>;
+}
+
 export interface Database {
   User: UserTable;
   TimeEvent: TimeEventTable;
@@ -299,4 +318,5 @@ export interface Database {
   Task: TaskTable;
   TaskComment: TaskCommentTable;
   EmailCode: EmailCodeTable;
+  TimeCorrectionRequest: TimeCorrectionRequestTable;
 }

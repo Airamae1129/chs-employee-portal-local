@@ -40,7 +40,7 @@ payslipsRouter.get("/me", async (req, res) => {
 payslipsRouter.get("/ireland/:id/file", async (req, res) => {
   const payslip = await db.selectFrom("PayslipIreland").selectAll().where("id", "=", req.params.id).executeTakeFirst();
   if (!payslip) return res.status(404).json({ error: "Payslip not found" });
-  const isElevated = req.user!.role === "ADMIN";
+  const isElevated = req.user!.role === "PAYROLL";
   if (payslip.userId !== req.user!.sub && !isElevated) {
     return res.status(403).json({ error: "You can only view your own payslips" });
   }
@@ -52,7 +52,7 @@ payslipsRouter.get("/ireland/:id/file", async (req, res) => {
 payslipsRouter.get("/ph/:id/file", async (req, res) => {
   const payslip = await db.selectFrom("GeneratedPayslip").selectAll().where("id", "=", req.params.id).executeTakeFirst();
   if (!payslip || !payslip.fileKey) return res.status(404).json({ error: "Payslip not found" });
-  const isElevated = req.user!.role === "ADMIN";
+  const isElevated = req.user!.role === "PAYROLL";
   if (payslip.userId !== req.user!.sub && !isElevated) {
     return res.status(403).json({ error: "You can only view your own payslips" });
   }
@@ -63,8 +63,8 @@ payslipsRouter.get("/ph/:id/file", async (req, res) => {
 
 const uploadSchema = z.object({ userId: z.string(), period: z.string() });
 
-/** POST /payslips/ireland/upload — Admin uploads a PDF per employee per period. */
-payslipsRouter.post("/ireland/upload", allow("ADMIN"), upload.single("file"), async (req, res) => {
+/** POST /payslips/ireland/upload — Payroll uploads a PDF per employee per period. */
+payslipsRouter.post("/ireland/upload", allow("PAYROLL"), upload.single("file"), async (req, res) => {
   const parsed = uploadSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "userId and period are required" });
   if (!req.file) return res.status(400).json({ error: "A payslip PDF upload is required" });
@@ -96,8 +96,8 @@ payslipsRouter.post("/ireland/upload", allow("ADMIN"), upload.single("file"), as
   res.status(201).json({ payslip });
 });
 
-/** GET /payslips/team — Admin only (Section 3: team payslips not visible to Manager by default). */
-payslipsRouter.get("/team", allow("ADMIN"), async (_req, res) => {
+/** GET /payslips/team — Payroll only (roles table: only Payroll views others' payslips). */
+payslipsRouter.get("/team", allow("PAYROLL"), async (_req, res) => {
   const [ireland, ph] = await Promise.all([
     db.selectFrom("PayslipIreland").selectAll().orderBy("period", "desc").execute(),
     db.selectFrom("GeneratedPayslip").selectAll().orderBy("period", "desc").execute(),
@@ -106,12 +106,13 @@ payslipsRouter.get("/team", allow("ADMIN"), async (_req, res) => {
 });
 
 /**
- * GET /payslips/all — Admin-only: every published/uploaded payslip for
+ * GET /payslips/all — Payroll only: every published/uploaded payslip for
  * every user, for the Payslips tab (revision: "List of ALL Generated
- * payslips for all Users" — Admin sees everything; Employee/Manager
+ * payslips for all Users" — Payroll sees everything; everyone else,
+ * Admin included,
  * stay scoped to their own via GET /payslips/me).
  */
-payslipsRouter.get("/all", allow("ADMIN"), async (_req, res) => {
+payslipsRouter.get("/all", allow("PAYROLL"), async (_req, res) => {
   const [uploaded, generated] = await Promise.all([
     db.selectFrom("PayslipIreland").selectAll().orderBy("period", "desc").execute(),
     db.selectFrom("GeneratedPayslip").selectAll().where("status", "=", "PUBLISHED").orderBy("period", "desc").execute(),
@@ -125,15 +126,15 @@ payslipsRouter.get("/all", allow("ADMIN"), async (_req, res) => {
   });
 });
 
-/** DELETE /payslips/ireland/:id — Admin removes an uploaded payslip (Payslips: "Delete Option"). */
-payslipsRouter.delete("/ireland/:id", allow("ADMIN"), async (req, res) => {
+/** DELETE /payslips/ireland/:id — Payroll removes an uploaded payslip (Payslips: "Delete Option"). */
+payslipsRouter.delete("/ireland/:id", allow("PAYROLL"), async (req, res) => {
   await db.deleteFrom("PayslipIreland").where("id", "=", req.params.id).execute();
   await writeAuditLog({ userId: req.user!.sub, action: "PayslipDeleted", targetId: req.params.id });
   res.json({ ok: true });
 });
 
-/** DELETE /payslips/ph/:id — Admin removes a generated payslip. */
-payslipsRouter.delete("/ph/:id", allow("ADMIN"), async (req, res) => {
+/** DELETE /payslips/ph/:id — Payroll removes a generated payslip. */
+payslipsRouter.delete("/ph/:id", allow("PAYROLL"), async (req, res) => {
   await db.deleteFrom("GeneratedPayslip").where("id", "=", req.params.id).execute();
   await writeAuditLog({ userId: req.user!.sub, action: "PayslipDeleted", targetId: req.params.id });
   res.json({ ok: true });

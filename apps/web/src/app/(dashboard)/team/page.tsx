@@ -62,7 +62,7 @@ export default function TeamPage() {
 
   return (
     <div>
-      <PageHeader title={user.role === "ADMIN" ? "All Staff — Timekeeping" : "My Team — Timekeeping"} />
+      <PageHeader title={user.role === "MANAGER" ? "My Team — Timekeeping" : "All Staff — Timekeeping"} />
 
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
         <StatCard icon={Users} value={teamUsers.length || Object.keys(byUser).length} label="Team members" />

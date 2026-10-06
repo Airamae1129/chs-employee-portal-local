@@ -100,7 +100,16 @@ async function isCurrentPassword(newPassword: string, passwordHash: string | nul
   return !!passwordHash && (await bcrypt.compare(newPassword, passwordHash));
 }
 
-// ---------- MFA lockout ----------
+// ---------- Lockouts ----------
+
+// Roles table test: "Ten wrong passwords: locks."
+const PASSWORD_MAX_FAILURES = 10;
+const PASSWORD_LOCK_MINUTES = 30;
+
+function passwordLockedMessage(until: Date): string {
+  return `Your account is locked after too many wrong passwords. Try again after ${until.toLocaleTimeString("en-IE", { hour: "2-digit", minute: "2-digit" })}, or reset your password with "Forgot your password?".`;
+}
+
 
 const MFA_MAX_FAILURES = 5;
 const MFA_LOCK_MINUTES = 15;
@@ -171,9 +180,24 @@ authRouter.post("/login", async (req, res) => {
     return res.status(401).json({ error: "Invalid email or password" });
   }
 
+  const lockedUntil = user.loginLockedUntil && new Date(user.loginLockedUntil) > new Date() ? new Date(user.loginLockedUntil) : null;
+  if (lockedUntil) return res.status(423).json({ error: passwordLockedMessage(lockedUntil) });
+
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) {
+    const failures = user.failedLoginCount + 1;
+    if (failures >= PASSWORD_MAX_FAILURES) {
+      const until = new Date(Date.now() + PASSWORD_LOCK_MINUTES * 60 * 1000);
+      await db.updateTable("User").set({ failedLoginCount: 0, loginLockedUntil: until }).where("id", "=", user.id).execute();
+      await writeAuditLog({ userId: user.id, action: "AccountLocked", metadata: { reason: `${PASSWORD_MAX_FAILURES} wrong passwords` } });
+      return res.status(423).json({ error: passwordLockedMessage(until) });
+    }
+    await db.updateTable("User").set({ failedLoginCount: failures }).where("id", "=", user.id).execute();
+    await writeAuditLog({ userId: user.id, action: "LoginFailed", metadata: { failedAttempts: failures } });
     return res.status(401).json({ error: "Invalid email or password" });
+  }
+  if (user.failedLoginCount > 0 || user.loginLockedUntil) {
+    await db.updateTable("User").set({ failedLoginCount: 0, loginLockedUntil: null }).where("id", "=", user.id).execute();
   }
 
   // Only revealed after the correct password, so it can't be used to find out
@@ -450,7 +474,7 @@ authRouter.post("/password/reset", async (req, res) => {
   const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
   await db
     .updateTable("User")
-    .set({ passwordHash, mustResetPassword: false, updatedAt: new Date() })
+    .set({ passwordHash, mustResetPassword: false, failedLoginCount: 0, loginLockedUntil: null, updatedAt: new Date() })
     .where("id", "=", user.id)
     .execute();
   await writeAuditLog({ userId: user.id, action: "PasswordResetCompleted" });

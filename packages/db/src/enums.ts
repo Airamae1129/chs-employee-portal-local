@@ -3,7 +3,7 @@
 // string literal type for column typing — the Postgres ENUM does the
 // actual constraint enforcement at the DB layer.
 
-export type Role = "EMPLOYEE" | "MANAGER" | "ADMIN";
+export type Role = "EMPLOYEE" | "MANAGER" | "ADMIN" | "PAYROLL";
 export type Country = "IRELAND" | "PHILIPPINES";
 export type UserStatus = "ACTIVE" | "INACTIVE";
 export type TimeEventType = "IN" | "OUT";
@@ -20,5 +20,5 @@ export type WorkspaceAccessStatus = "REQUESTED" | "APPROVED" | "REJECTED";
 export type SalaryType = "MONTHLY" | "HOURLY";
 export type GeneratedPayslipStatus = "DRAFT" | "HR_REVIEW" | "APPROVED" | "PUBLISHED";
 
-export const Role = { EMPLOYEE: "EMPLOYEE", MANAGER: "MANAGER", ADMIN: "ADMIN" } as const;
+export const Role = { EMPLOYEE: "EMPLOYEE", MANAGER: "MANAGER", ADMIN: "ADMIN", PAYROLL: "PAYROLL" } as const;
 export const Country = { IRELAND: "IRELAND", PHILIPPINES: "PHILIPPINES" } as const;

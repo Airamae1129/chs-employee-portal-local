@@ -27,6 +27,7 @@ export default function DashboardPage() {
   const [upcomingHolidays, setUpcomingHolidays] = useState(0);
   const [policyCount, setPolicyCount] = useState(0);
   const [leaveRemaining, setLeaveRemaining] = useState<number | null>(null);
+  const [leaveTotal, setLeaveTotal] = useState<number | null>(null);
   const [clockChart, setClockChart] = useState<{ label: string; value: number }[]>([]);
   const [requestsByType, setRequestsByType] = useState<{ label: string; value: number }[]>([]);
 
@@ -82,7 +83,10 @@ export default function DashboardPage() {
       .catch(() => void 0);
 
     apiFetch<{ balance: { remaining: number; total: number } }>("/hr-requests/leave-balance")
-      .then(({ balance }) => setLeaveRemaining(balance.remaining))
+      .then(({ balance }) => {
+        setLeaveRemaining(balance.remaining);
+        setLeaveTotal(balance.total);
+      })
       .catch(() => void 0);
 
     if (user.role === "MANAGER" || user.role === "ADMIN") {
@@ -92,8 +96,12 @@ export default function DashboardPage() {
         .then(({ exceptions }) => setTeamOpenSessions(exceptions.missingClockOuts.length))
         .catch(() => void 0);
 
-      apiFetch<{ requests: any[] }>("/hr-requests/team")
-        .then(({ requests }) => setTeamPendingApprovals(requests.filter((r) => r.status === "SUBMITTED").length))
+      // HR requests and time corrections waiting for this person (never their own).
+      Promise.all([
+        apiFetch<{ requests: any[] }>("/hr-requests/team").then(({ requests }) => requests.filter((r) => r.status === "SUBMITTED").length),
+        apiFetch<{ requests: any[] }>("/time/corrections/pending").then(({ requests }) => requests.length),
+      ])
+        .then(([hr, corrections]) => setTeamPendingApprovals(hr + corrections))
         .catch(() => void 0);
     }
 
@@ -122,7 +130,7 @@ export default function DashboardPage() {
         <StatCard icon={FileText} value={pendingRequests} label="Pending HR requests" />
         <StatCard icon={CalendarDays} value={upcomingHolidays} label="Upcoming holidays" subtext={user.country === "IRELAND" ? "Ireland" : "Philippines"} />
         <StatCard icon={BookOpen} value={policyCount} label="Policies published" />
-        <StatCard icon={CalendarOff} value={leaveRemaining ?? "—"} label="Paid leave days left" subtext="of 12 this year" />
+        <StatCard icon={CalendarOff} value={leaveRemaining ?? "—"} label="Paid leave days left" subtext={`of ${leaveTotal ?? 12} this year`} />
 
         {(user.role === "MANAGER" || user.role === "ADMIN") && (
           <>

@@ -10,7 +10,8 @@ import { writeAuditLog } from "../utils/audit";
 /**
  * Policies & Templates: every policy title is a folder, and each folder
  * holds any number of documents (a link or an uploaded file) — the same
- * shape as Client Workspaces. Any staff member can add and update.
+ * shape as Client Workspaces. Everyone can read them; only Admin adds,
+ * edits or deletes (roles table: "Add, edit, delete folders, clients, links").
  */
 export const policiesRouter = Router();
 policiesRouter.use(requireAuth);
@@ -51,7 +52,7 @@ const folderSchema = z.object({
 });
 
 /** POST /policies — create a folder (optionally with a first link or file). */
-policiesRouter.post("/", upload.single("file"), async (req, res) => {
+policiesRouter.post("/", allow("ADMIN"), upload.single("file"), async (req, res) => {
   const parsed = folderSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "A title is required" });
 
@@ -91,7 +92,7 @@ const updateSchema = z.object({
 });
 
 /** PATCH /policies/:id — rename / re-describe a folder. */
-policiesRouter.patch("/:id", async (req, res) => {
+policiesRouter.patch("/:id", allow("ADMIN"), async (req, res) => {
   const parsed = updateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid policy payload" });
   const policy = await db
@@ -106,7 +107,7 @@ policiesRouter.patch("/:id", async (req, res) => {
 });
 
 /** DELETE /policies/:id — removes the folder and every document in it. */
-policiesRouter.delete("/:id", async (req, res) => {
+policiesRouter.delete("/:id", allow("ADMIN"), async (req, res) => {
   const items = await db.selectFrom("PolicyItem").select("fileKey").where("policyId", "=", req.params.id).execute();
   await removeStoredFiles(items.map((i) => i.fileKey));
   await db.deleteFrom("PolicyAcknowledgement").where("policyId", "=", req.params.id).execute();
@@ -122,7 +123,7 @@ const itemSchema = z.object({
 });
 
 /** POST /policies/:id/items — add a link or upload a file into a folder. */
-policiesRouter.post("/:id/items", upload.single("file"), async (req, res) => {
+policiesRouter.post("/:id/items", allow("ADMIN"), upload.single("file"), async (req, res) => {
   const parsed = itemSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "A title and a valid link are required" });
   if (!req.file && !parsed.data.linkUrl) return res.status(400).json({ error: "Provide a link or upload a file" });
@@ -157,7 +158,7 @@ const itemUpdateSchema = z.object({
 });
 
 /** PATCH /policies/:id/items/:itemId */
-policiesRouter.patch("/:id/items/:itemId", async (req, res) => {
+policiesRouter.patch("/:id/items/:itemId", allow("ADMIN"), async (req, res) => {
   const parsed = itemUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid document payload" });
   const item = await db
@@ -173,7 +174,7 @@ policiesRouter.patch("/:id/items/:itemId", async (req, res) => {
 });
 
 /** DELETE /policies/:id/items/:itemId */
-policiesRouter.delete("/:id/items/:itemId", async (req, res) => {
+policiesRouter.delete("/:id/items/:itemId", allow("ADMIN"), async (req, res) => {
   const item = await db.selectFrom("PolicyItem").select(["id", "fileKey"]).where("id", "=", req.params.itemId).where("policyId", "=", req.params.id).executeTakeFirst();
   if (!item) return res.status(404).json({ error: "Document not found" });
   await removeStoredFiles([item.fileKey]);

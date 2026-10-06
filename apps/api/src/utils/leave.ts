@@ -1,16 +1,22 @@
 import { db } from "../db";
 
-/** Staff Accounts / Payroll revision: 12 paid leave days per calendar year, per employee. */
+/** Default paid leave days per calendar year; Admin can adjust it per person (User.leaveAllowanceDays). */
 export const PAID_LEAVE_DAYS_PER_YEAR = 12;
+
+async function leaveAllowanceFor(employeeId: string): Promise<number> {
+  const user = await db.selectFrom("User").select("leaveAllowanceDays").where("id", "=", employeeId).executeTakeFirst();
+  return user?.leaveAllowanceDays ?? PAID_LEAVE_DAYS_PER_YEAR;
+}
 
 /**
  * Expands every APPROVED, PAID leave request for `employeeId` in `year`
  * into individual Mon-Fri dates, in submission order, and marks the
- * first PAID_LEAVE_DAYS_PER_YEAR of them "PAID" and the rest "UNPAID"
+ * first <their leave allowance> of them "PAID" and the rest "UNPAID"
  * (exceeding the allowance). Shared by Payroll (attendance/pay per day)
  * and the leave-balance display (Dashboard, HR Requests).
  */
 export async function paidLeaveDayStatusForYear(employeeId: string, year: number): Promise<Map<string, "PAID" | "UNPAID">> {
+  const allowance = await leaveAllowanceFor(employeeId);
   const requests = await db
     .selectFrom("HRRequest")
     .selectAll()
@@ -37,7 +43,7 @@ export async function paidLeaveDayStatusForYear(employeeId: string, year: number
   }
   dates.sort();
   const status = new Map<string, "PAID" | "UNPAID">();
-  dates.forEach((date, i) => status.set(date, i < PAID_LEAVE_DAYS_PER_YEAR ? "PAID" : "UNPAID"));
+  dates.forEach((date, i) => status.set(date, i < allowance ? "PAID" : "UNPAID"));
   return status;
 }
 
@@ -50,7 +56,7 @@ export interface LeaveBalance {
 
 /** Paid leave days used/remaining this year — reduces only once a leave request is APPROVED. */
 export async function computeLeaveBalance(employeeId: string, year: number = new Date().getFullYear()): Promise<LeaveBalance> {
-  const status = await paidLeaveDayStatusForYear(employeeId, year);
+  const [status, total] = await Promise.all([paidLeaveDayStatusForYear(employeeId, year), leaveAllowanceFor(employeeId)]);
   const used = [...status.values()].filter((s) => s === "PAID").length;
-  return { year, total: PAID_LEAVE_DAYS_PER_YEAR, used, remaining: Math.max(0, PAID_LEAVE_DAYS_PER_YEAR - used) };
+  return { year, total, used, remaining: Math.max(0, total - used) };
 }

@@ -9,6 +9,7 @@
  * Safe to re-run — it always starts from a clean slate for the tables
  * it touches.
  */
+import { sql } from "kysely";
 import { db } from "../src/index";
 import bcrypt from "bcryptjs";
 
@@ -19,7 +20,8 @@ async function main() {
 
   // Wipe transactional data that references User, then Users themselves,
   // so the roster below starts from a clean slate. Dev/demo data only.
-  await db.deleteFrom("AuditLog").execute();
+  // The audit log is append-only (row deletes are blocked); TRUNCATE is the dev-reset path.
+  await sql`TRUNCATE "AuditLog"`.execute(db);
   await db.deleteFrom("PolicyAcknowledgement").execute();
   await db.deleteFrom("WorkspaceAccessRequest").execute();
   await db.deleteFrom("ClientWorkspaceItem").execute();
@@ -29,6 +31,7 @@ async function main() {
   await db.deleteFrom("SalaryConfig").execute();
   await db.deleteFrom("HRRequest").execute();
   await db.deleteFrom("CalendarEntry").execute();
+  await db.deleteFrom("TimeCorrectionRequest").execute();
   await db.deleteFrom("TimeEvent").execute();
   await db.deleteFrom("Task").execute();
   await db.deleteFrom("Announcement").execute();
@@ -40,7 +43,7 @@ async function main() {
   async function createUser(input: {
     name: string;
     email: string;
-    role: "EMPLOYEE" | "MANAGER" | "ADMIN";
+    role: "EMPLOYEE" | "MANAGER" | "ADMIN" | "PAYROLL";
     country: "IRELAND" | "PHILIPPINES";
     jobTitle: string;
     managerId?: string | null;

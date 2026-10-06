@@ -13,6 +13,7 @@ const ROLE_LABEL: Record<CurrentUser["role"], string> = {
   EMPLOYEE: "employee",
   MANAGER: "manager",
   ADMIN: "admin",
+  PAYROLL: "payroll",
 };
 
 export function Sidebar({ user }: { user: CurrentUser }) {

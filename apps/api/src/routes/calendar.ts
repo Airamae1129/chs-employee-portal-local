@@ -132,8 +132,7 @@ calendarRouter.patch("/notes/:id", async (req, res) => {
 calendarRouter.delete("/notes/:id", async (req, res) => {
   const existing = await db.selectFrom("CalendarEntry").selectAll().where("id", "=", req.params.id).executeTakeFirst();
   if (!existing) return res.status(404).json({ error: "Note not found" });
-  const isElevated = req.user!.role === "MANAGER" || req.user!.role === "ADMIN";
-  if (existing.userId !== req.user!.sub && !isElevated) {
+  if (existing.userId !== req.user!.sub) {
     return res.status(403).json({ error: "You can only delete your own task notes" });
   }
   await db.deleteFrom("CalendarEntry").where("id", "=", existing.id).execute();
@@ -141,11 +140,12 @@ calendarRouter.delete("/notes/:id", async (req, res) => {
 });
 
 /**
- * GET /calendar/team?month= — Manager/Admin read-only view of the
- * team's status/leave/holidays/task notes (Section 6: "read-only, not
- * editable by the manager" for task notes).
+ * GET /calendar/team?month= — read-only view of the team's
+ * status/leave/holidays/task notes (Section 6: "read-only, not editable
+ * by the manager" for task notes). Manager: their team; Admin and
+ * Payroll: everyone (roles table: "My Team page").
  */
-calendarRouter.get("/team", allow("MANAGER", "ADMIN"), async (req, res) => {
+calendarRouter.get("/team", allow("MANAGER", "ADMIN", "PAYROLL"), async (req, res) => {
   const { start, end } = monthRange(req.query.month as string | undefined);
   const startD = isoDate(start);
   const endD = isoDate(end);

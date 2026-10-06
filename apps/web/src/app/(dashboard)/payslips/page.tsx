@@ -23,25 +23,35 @@ interface GeneratedPayslip {
   user?: { name: string } | null;
 }
 
+interface MySalary {
+  baseRate: string;
+  allowances: string;
+  currency: string;
+  updatedAt: string;
+}
+
 const CURRENCY_SYMBOL: Record<string, string> = { EUR: "€", PHP: "₱" };
 
 export default function PayslipsPage() {
   const { user } = useCurrentUser();
   const [uploaded, setUploaded] = useState<IrelandPayslip[]>([]);
   const [generated, setGenerated] = useState<GeneratedPayslip[]>([]);
-  const isAdmin = user?.role === "ADMIN";
+  const [mySalary, setMySalary] = useState<MySalary | null | undefined>(undefined);
+  // Roles table: only Payroll views other people's payslips; everyone else,
+  // Admin included, sees their own — enforced server-side either way.
+  const seesAll = user?.role === "PAYROLL";
 
   useEffect(() => {
     if (!user) return;
-    // Admin: every employee's payslips (Payslips revision — "List of ALL
-    // Generated payslips for all Users"). Employee/Manager: own only, no
-    // access to anyone else's — enforced server-side either way.
-    const endpoint = isAdmin ? "/payslips/all" : "/payslips/me";
+    const endpoint = seesAll ? "/payslips/all" : "/payslips/me";
     apiFetch<{ uploaded: IrelandPayslip[]; generated: GeneratedPayslip[] }>(endpoint).then(({ uploaded, generated }) => {
       setUploaded(uploaded);
       setGenerated(generated);
     });
-  }, [user, isAdmin]);
+    apiFetch<{ salary: MySalary | null }>("/me/salary")
+      .then(({ salary }) => setMySalary(salary))
+      .catch(() => setMySalary(null));
+  }, [user, seesAll]);
 
   async function openFile(kind: "ireland" | "ph", id: string, mode: "view" | "download") {
     try {
@@ -59,15 +69,36 @@ export default function PayslipsPage() {
     <div>
       <PageHeader title="Payslips" />
 
+      {mySalary !== undefined && (
+        <Card className="mb-6">
+          <div className="text-sm text-gray-500">My salary</div>
+          {mySalary ? (
+            <div className="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+              <span className="text-2xl font-bold text-chs-charcoal">
+                {CURRENCY_SYMBOL[mySalary.currency] ?? ""}{Number(mySalary.baseRate).toLocaleString()}
+                <span className="ml-1 text-sm font-normal text-gray-400">/ month</span>
+              </span>
+              {Number(mySalary.allowances) > 0 && (
+                <span className="text-sm text-gray-500">
+                  + {CURRENCY_SYMBOL[mySalary.currency] ?? ""}{Number(mySalary.allowances).toLocaleString()} allowances
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="mt-1 text-sm text-gray-400">Not set yet — Payroll sets salaries.</div>
+          )}
+        </Card>
+      )}
+
       <Card className="mb-6">
         <div className="mb-4 text-base font-bold text-chs-charcoal">
-          {isAdmin ? "Generated payslips — all employees" : "Generated payslips"}
+          {seesAll ? "Generated payslips — all employees" : "Generated payslips"}
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b border-gray-100 text-xs uppercase text-gray-400">
-                {isAdmin && <th className="py-2">Employee</th>}
+                {seesAll && <th className="py-2">Employee</th>}
                 <th className="py-2">Period</th>
                 <th className="py-2">Net pay</th>
                 <th className="py-2">Published</th>
@@ -77,7 +108,7 @@ export default function PayslipsPage() {
             <tbody>
               {generated.map((p) => (
                 <tr key={p.id} className="border-b border-gray-50">
-                  {isAdmin && <td className="py-2.5">{p.user?.name ?? "—"}</td>}
+                  {seesAll && <td className="py-2.5">{p.user?.name ?? "—"}</td>}
                   <td className="py-2.5">{p.period}</td>
                   <td className="py-2.5 font-semibold">
                     {CURRENCY_SYMBOL[p.currency] ?? ""}{Number(p.netPay).toLocaleString()}
@@ -97,7 +128,7 @@ export default function PayslipsPage() {
               ))}
               {generated.length === 0 && (
                 <tr>
-                  <td colSpan={isAdmin ? 5 : 4} className="py-4 text-sm text-gray-400">
+                  <td colSpan={seesAll ? 5 : 4} className="py-4 text-sm text-gray-400">
                     No published payslips yet.
                   </td>
                 </tr>
@@ -111,13 +142,13 @@ export default function PayslipsPage() {
         <Card>
           <div className="mb-4 flex items-center gap-2 text-base font-bold text-chs-charcoal">
             Uploaded payslips
-            <Badge tone="gray">Admin override</Badge>
+            <Badge tone="gray">Uploaded by Payroll</Badge>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-gray-100 text-xs uppercase text-gray-400">
-                  {isAdmin && <th className="py-2">Employee</th>}
+                  {seesAll && <th className="py-2">Employee</th>}
                   <th className="py-2">Period</th>
                   <th className="py-2">Uploaded</th>
                   <th className="py-2" />
@@ -126,7 +157,7 @@ export default function PayslipsPage() {
               <tbody>
                 {uploaded.map((p) => (
                   <tr key={p.id} className="border-b border-gray-50">
-                    {isAdmin && <td className="py-2.5">{p.user?.name ?? "—"}</td>}
+                    {seesAll && <td className="py-2.5">{p.user?.name ?? "—"}</td>}
                     <td className="py-2.5">{p.period}</td>
                     <td className="py-2.5 text-gray-500">{new Date(p.uploadedAt).toLocaleDateString()}</td>
                     <td className="py-2.5 text-right">

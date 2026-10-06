@@ -1,4 +1,4 @@
-export type Role = "EMPLOYEE" | "MANAGER" | "ADMIN";
+export type Role = "EMPLOYEE" | "MANAGER" | "ADMIN" | "PAYROLL";
 export type Country = "IRELAND" | "PHILIPPINES";
 
 export interface CurrentUser {

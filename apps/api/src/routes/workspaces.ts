@@ -6,10 +6,35 @@ import { db } from "../db";
 import { requireAuth } from "../middleware/auth";
 import { allow } from "../middleware/rbac";
 import { writeAuditLog } from "../utils/audit";
+import { OWN_APPROVAL_MESSAGE } from "../utils/team";
 import { getStorageAdapter } from "../utils/storage";
 
+/**
+ * Client Workspaces (roles table):
+ * - Everyone sees the client directory, but a client's links and files
+ *   only once they're assigned to it (an APPROVED access request); Admin
+ *   sees everything.
+ * - Only Admin adds, edits or deletes clients, links and files.
+ * - Anyone requests access for themselves; a Manager approves requests
+ *   for clients they're assigned to, an Admin any — never their own.
+ */
 export const workspacesRouter = Router();
 workspacesRouter.use(requireAuth);
+
+/** Workspace ids the user has been granted (approved) access to. */
+async function assignedWorkspaceIds(userId: string): Promise<Set<string>> {
+  const rows = await db
+    .selectFrom("WorkspaceAccessRequest")
+    .select("workspaceId")
+    .where("userId", "=", userId)
+    .where("status", "=", "APPROVED")
+    .execute();
+  return new Set(rows.map((r) => r.workspaceId));
+}
+
+async function canOpenWorkspace(user: { sub: string; role: string }, workspaceId: string): Promise<boolean> {
+  return user.role === "ADMIN" || (await assignedWorkspaceIds(user.sub)).has(workspaceId);
+}
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -19,7 +44,7 @@ async function removeStoredFiles(keys: (string | null)[]) {
   }
 }
 
-/** GET /workspaces — directory of clients, each with its nested links; own access-request status included. */
+/** GET /workspaces — directory of clients; links/files only for clients you're assigned to (Admin: all). */
 workspacesRouter.get("/", async (req, res) => {
   const workspaces = await db.selectFrom("ClientWorkspace").selectAll().orderBy("clientName", "asc").execute();
   const myRequests = await db.selectFrom("WorkspaceAccessRequest").selectAll().where("userId", "=", req.user!.sub).execute();
@@ -38,16 +63,24 @@ workspacesRouter.get("/", async (req, res) => {
     list.push(item);
     itemsByWorkspace.set(item.workspaceId, list);
   }
+  const isAdmin = req.user!.role === "ADMIN";
+  const assigned = isAdmin ? null : await assignedWorkspaceIds(req.user!.sub);
   res.json({
-    workspaces: workspaces.map((w) => ({
+    workspaces: workspaces.map((w) => {
+      const hasAccess = isAdmin || assigned!.has(w.id);
+      return {
       ...w,
+      // The client folder's own link is a link too — only for people with access.
+      linkUrl: hasAccess ? w.linkUrl : null,
+      hasAccess,
       myAccessRequest: byWorkspace.get(w.id) ?? null,
-      items: (itemsByWorkspace.get(w.id) ?? []).map(({ fileKey, ...i }) => ({
+      items: (hasAccess ? itemsByWorkspace.get(w.id) ?? [] : []).map(({ fileKey, ...i }) => ({
         ...i,
         hasFile: !!fileKey,
         fileName: fileKey ? fileKey.split("/").pop()!.replace(/^\d+-/, "") : null,
       })),
-    })),
+      };
+    }),
   });
 });
 
@@ -56,8 +89,8 @@ const createWorkspaceSchema = z.object({
   description: z.string().optional(),
 });
 
-/** POST /workspaces — Manager/Admin creates a client folder (Client Workspaces: "Add Client"). */
-workspacesRouter.post("/", allow("MANAGER", "ADMIN"), async (req, res) => {
+/** POST /workspaces — Admin creates a client folder (Client Workspaces: "Add Client"). */
+workspacesRouter.post("/", allow("ADMIN"), async (req, res) => {
   const parsed = createWorkspaceSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid workspace payload" });
   const workspace = await db
@@ -75,7 +108,7 @@ const updateWorkspaceSchema = z.object({
 });
 
 /** PATCH /workspaces/:id — edit a client folder. */
-workspacesRouter.patch("/:id", allow("MANAGER", "ADMIN"), async (req, res) => {
+workspacesRouter.patch("/:id", allow("ADMIN"), async (req, res) => {
   const parsed = updateWorkspaceSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid workspace payload" });
   const workspace = await db
@@ -89,7 +122,7 @@ workspacesRouter.patch("/:id", allow("MANAGER", "ADMIN"), async (req, res) => {
 });
 
 /** DELETE /workspaces/:id — remove a client folder and its links. */
-workspacesRouter.delete("/:id", allow("MANAGER", "ADMIN"), async (req, res) => {
+workspacesRouter.delete("/:id", allow("ADMIN"), async (req, res) => {
   const files = await db.selectFrom("ClientWorkspaceItem").select("fileKey").where("workspaceId", "=", req.params.id).execute();
   await removeStoredFiles(files.map((f) => f.fileKey));
   await db.deleteFrom("WorkspaceAccessRequest").where("workspaceId", "=", req.params.id).execute();
@@ -106,12 +139,10 @@ const itemSchema = z.object({
 });
 
 /**
- * POST /workspaces/:id/items — a titled SharePoint link or an uploaded
- * file inside a client folder. Revision: "visible for ALL Employee,
- * Manager and Admin anyone can Update" — any authenticated staff member
- * can add or edit these.
+ * POST /workspaces/:id/items — Admin adds a titled SharePoint link or an
+ * uploaded file inside a client folder.
  */
-workspacesRouter.post("/:id/items", upload.single("file"), async (req, res) => {
+workspacesRouter.post("/:id/items", allow("ADMIN"), upload.single("file"), async (req, res) => {
   const parsed = itemSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "A title and a valid link are required" });
   if (!req.file && !parsed.data.linkUrl) return res.status(400).json({ error: "Provide a link or upload a file" });
@@ -135,11 +166,15 @@ workspacesRouter.post("/:id/items", upload.single("file"), async (req, res) => {
     })
     .returningAll()
     .executeTakeFirstOrThrow();
+  await writeAuditLog({ userId: req.user!.sub, action: "ClientLinkAdded", targetId: item.id, metadata: { workspaceId: workspace.id, title: item.title } });
   res.status(201).json({ item });
 });
 
-/** GET /workspaces/:id/items/:itemId/file — short-lived signed link to an uploaded file. */
+/** GET /workspaces/:id/items/:itemId/file — short-lived signed link to an uploaded file (assigned clients only). */
 workspacesRouter.get("/:id/items/:itemId/file", async (req, res) => {
+  if (!(await canOpenWorkspace(req.user!, req.params.id))) {
+    return res.status(403).json({ error: "Request access to this client first" });
+  }
   const item = await db
     .selectFrom("ClientWorkspaceItem")
     .select("fileKey")
@@ -152,7 +187,7 @@ workspacesRouter.get("/:id/items/:itemId/file", async (req, res) => {
 
 const itemUpdateSchema = itemSchema.partial();
 
-workspacesRouter.patch("/:id/items/:itemId", async (req, res) => {
+workspacesRouter.patch("/:id/items/:itemId", allow("ADMIN"), async (req, res) => {
   const parsed = itemUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid item payload" });
   const item = await db
@@ -163,14 +198,16 @@ workspacesRouter.patch("/:id/items/:itemId", async (req, res) => {
     .returningAll()
     .executeTakeFirst();
   if (!item) return res.status(404).json({ error: "Document not found" });
+  await writeAuditLog({ userId: req.user!.sub, action: "ClientLinkUpdated", targetId: item.id });
   res.json({ item });
 });
 
-workspacesRouter.delete("/:id/items/:itemId", allow("MANAGER", "ADMIN"), async (req, res) => {
+workspacesRouter.delete("/:id/items/:itemId", allow("ADMIN"), async (req, res) => {
   const item = await db.selectFrom("ClientWorkspaceItem").select("fileKey").where("id", "=", req.params.itemId).where("workspaceId", "=", req.params.id).executeTakeFirst();
   if (!item) return res.status(404).json({ error: "Document not found" });
   await removeStoredFiles([item.fileKey]);
   await db.deleteFrom("ClientWorkspaceItem").where("id", "=", req.params.itemId).execute();
+  await writeAuditLog({ userId: req.user!.sub, action: "ClientLinkDeleted", targetId: req.params.itemId });
   res.json({ ok: true });
 });
 
@@ -199,17 +236,23 @@ workspacesRouter.post("/:id/request-access", async (req, res) => {
         .returningAll()
         .executeTakeFirstOrThrow();
 
+  await writeAuditLog({ userId: req.user!.sub, action: "WorkspaceAccessRequested", targetId: request.id, metadata: { workspaceId: workspace.id } });
   res.status(201).json({ request });
 });
 
-/** GET /workspaces/requests/pending — Manager/Admin approves requests. */
-workspacesRouter.get("/requests/pending", allow("MANAGER", "ADMIN"), async (_req, res) => {
-  const requests = await db
+/** GET /workspaces/requests/pending — requests the caller may decide: Admin any, Manager for clients they're assigned to. Never their own. */
+workspacesRouter.get("/requests/pending", allow("MANAGER", "ADMIN"), async (req, res) => {
+  let query = db
     .selectFrom("WorkspaceAccessRequest")
     .selectAll()
     .where("status", "=", "REQUESTED")
-    .orderBy("requestedAt", "asc")
-    .execute();
+    .where("userId", "!=", req.user!.sub);
+  if (req.user!.role !== "ADMIN") {
+    const assigned = [...(await assignedWorkspaceIds(req.user!.sub))];
+    if (assigned.length === 0) return res.json({ requests: [] });
+    query = query.where("workspaceId", "in", assigned);
+  }
+  const requests = await query.orderBy("requestedAt", "asc").execute();
 
   const workspaceIds = [...new Set(requests.map((r) => r.workspaceId))];
   const userIds = [...new Set(requests.map((r) => r.userId))];
@@ -231,16 +274,27 @@ workspacesRouter.patch("/requests/:id/decision", allow("MANAGER", "ADMIN"), asyn
   const parsed = decisionSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "decision is required" });
 
+  const existing = await db.selectFrom("WorkspaceAccessRequest").selectAll().where("id", "=", req.params.id).executeTakeFirst();
+  if (!existing) return res.status(404).json({ error: "Request not found" });
+  if (existing.userId === req.user!.sub) return res.status(403).json({ error: OWN_APPROVAL_MESSAGE });
+  if (!(await canOpenWorkspace(req.user!, existing.workspaceId))) {
+    return res.status(403).json({ error: "You can only approve access to clients you're assigned to" });
+  }
+  if (existing.status !== "REQUESTED") return res.status(400).json({ error: "This request has already been decided" });
+
   const updated = await db
     .updateTable("WorkspaceAccessRequest")
     .set({ status: parsed.data.decision, decidedById: req.user!.sub, decidedAt: new Date() })
-    .where("id", "=", req.params.id)
+    .where("id", "=", existing.id)
     .returningAll()
     .executeTakeFirstOrThrow();
 
-  if (parsed.data.decision === "APPROVED") {
-    await writeAuditLog({ userId: req.user!.sub, action: "WorkspaceAccessGranted", targetId: updated.id });
-  }
+  await writeAuditLog({
+    userId: req.user!.sub,
+    action: parsed.data.decision === "APPROVED" ? "WorkspaceAccessGranted" : "WorkspaceAccessRejected",
+    targetId: updated.id,
+    metadata: { forUserId: existing.userId, workspaceId: existing.workspaceId },
+  });
 
   res.json({ request: updated });
 });

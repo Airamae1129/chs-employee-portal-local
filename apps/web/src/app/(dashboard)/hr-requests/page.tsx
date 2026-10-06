@@ -113,6 +113,18 @@ export default function HRRequestsPage() {
     }
   }
 
+  async function cancelRequest(id: string) {
+    const ok = await confirmAction({ title: "Cancel this request?", text: "It will be withdrawn and no longer reviewed.", confirmText: "Yes, cancel it", danger: true });
+    if (!ok) return;
+    try {
+      await apiFetch(`/hr-requests/${id}/cancel`, { method: "POST" });
+      refresh();
+      notifySuccess("Request cancelled");
+    } catch (e) {
+      notifyError("Couldn't cancel request", e instanceof Error ? e.message : undefined);
+    }
+  }
+
   async function uploadDocument(id: string, file: File) {
     try {
       const form = new FormData();
@@ -231,20 +243,23 @@ export default function HRRequestsPage() {
 
       <Card>
         <div className="mb-4 text-base font-bold text-chs-charcoal">My requests</div>
-        <RequestTable requests={myRequests} onOpenDocument={openDocument} />
+        <RequestTable requests={myRequests} onOpenDocument={openDocument} onCancel={cancelRequest} />
       </Card>
 
       {(user.role === "MANAGER" || user.role === "ADMIN") && (
         <Card className="mt-6">
-          <div className="mb-4 text-base font-bold text-chs-charcoal">
-            {user.role === "ADMIN" ? "All requests" : "My team's requests"}
+          <div className="text-base font-bold text-chs-charcoal">
+            {user.role === "ADMIN" ? "Requests from everyone else" : "My team's requests"}
           </div>
+          <p className="mb-4 text-xs text-gray-400">
+            Your own requests are decided by someone else.{user.role === "ADMIN" ? " Upload the COE / HR letter to issue it." : " An Admin issues COEs and HR letters."}
+          </p>
           <RequestTable
             requests={teamRequests}
             showEmployee
             onDecide={decide}
             onOpenDocument={openDocument}
-            onUpload={uploadDocument}
+            onUpload={user.role === "ADMIN" ? uploadDocument : undefined}
             teamBalances={teamBalances}
           />
         </Card>
@@ -257,6 +272,7 @@ function RequestTable({
   requests,
   showEmployee,
   onDecide,
+  onCancel,
   onOpenDocument,
   onUpload,
   teamBalances,
@@ -264,6 +280,7 @@ function RequestTable({
   requests: HRRequest[];
   showEmployee?: boolean;
   onDecide?: (id: string, decision: "APPROVED" | "REJECTED") => void;
+  onCancel?: (id: string) => void;
   onOpenDocument: (id: string, mode: "view" | "download") => void;
   onUpload?: (id: string, file: File) => void;
   teamBalances?: Record<string, LeaveBalance>;
@@ -282,7 +299,7 @@ function RequestTable({
             <th className="py-2">Submitted</th>
             <th className="py-2">Status</th>
             <th className="py-2">Document</th>
-            {onDecide && <th className="py-2">Actions</th>}
+            {(onDecide || onCancel) && <th className="py-2">Actions</th>}
           </tr>
         </thead>
         <tbody>
@@ -342,6 +359,17 @@ function RequestTable({
                     <span className="text-xs text-gray-400">Not uploaded yet</span>
                   )}
                 </td>
+                {onCancel && (
+                  <td className="py-2.5">
+                    {r.status === "SUBMITTED" ? (
+                      <Button size="sm" variant="ghost" icon={<X size={13} />} onClick={() => onCancel(r.id)}>
+                        Cancel
+                      </Button>
+                    ) : (
+                      <span className="text-xs text-gray-300">—</span>
+                    )}
+                  </td>
+                )}
                 {onDecide && (
                   <td className="py-2.5">
                     {r.status === "SUBMITTED" ? (

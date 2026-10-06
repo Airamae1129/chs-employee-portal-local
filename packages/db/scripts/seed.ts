@@ -11,6 +11,7 @@
  * Run with: npm run db:seed (from repo root) after db:migrate.
  * Safe to re-run — it always starts from a clean slate for staff data.
  */
+import { sql } from "kysely";
 import { db } from "../src/index";
 import bcrypt from "bcryptjs";
 
@@ -25,7 +26,8 @@ async function main() {
   // Wipe every table that references User (children first), then Users
   // themselves, so the roster below always starts from a clean slate.
   await db.deleteFrom("Notification").execute();
-  await db.deleteFrom("AuditLog").execute();
+  // The audit log is append-only (row deletes are blocked); TRUNCATE is the dev-reset path.
+  await sql`TRUNCATE "AuditLog"`.execute(db);
   await db.deleteFrom("PolicyAcknowledgement").execute();
   await db.deleteFrom("WorkspaceAccessRequest").execute();
   await db.deleteFrom("ClientWorkspaceItem").execute();
@@ -35,6 +37,7 @@ async function main() {
   await db.deleteFrom("SalaryConfig").execute();
   await db.deleteFrom("HRRequest").execute();
   await db.deleteFrom("CalendarEntry").execute();
+  await db.deleteFrom("TimeCorrectionRequest").execute();
   await db.deleteFrom("TimeEvent").execute();
   await db.deleteFrom("Task").execute();
   await db.deleteFrom("Announcement").execute();
@@ -46,7 +49,7 @@ async function main() {
   async function createUser(input: {
     name: string;
     email: string;
-    role: "EMPLOYEE" | "MANAGER" | "ADMIN";
+    role: "EMPLOYEE" | "MANAGER" | "ADMIN" | "PAYROLL";
     country: "IRELAND" | "PHILIPPINES";
     jobTitle: string;
     managerId?: string | null;
@@ -81,6 +84,16 @@ async function main() {
     role: "MANAGER",
     country: "IRELAND",
     jobTitle: "Manager",
+    managerId: admin.id,
+  });
+
+  // Payroll is its own role, held by someone other than the Admin.
+  await createUser({
+    name: "Payroll",
+    email: "payroll@cyberhealth.ie",
+    role: "PAYROLL",
+    country: "IRELAND",
+    jobTitle: "Payroll",
     managerId: admin.id,
   });
 
@@ -165,6 +178,7 @@ async function main() {
   console.log(`  admin:    aira@cyberhealth.ie`);
   console.log(`  manager:  manager@cyberhealth.ie`);
   console.log(`  employee: employee@cyberhealth.ie`);
+  console.log(`  payroll:  payroll@cyberhealth.ie`);
   console.log("----------------------------------------------------");
 }
 

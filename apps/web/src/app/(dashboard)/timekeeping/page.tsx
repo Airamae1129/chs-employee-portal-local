@@ -5,6 +5,7 @@ import { Pencil, Trash2, Plus, LogIn, LogOut, Save, BellRing, ExternalLink } fro
 import { PageHeader, Card, Badge } from "@/components/PageHeader";
 import { Button } from "@/components/Button";
 import { LiveClocks } from "@/components/LiveClocks";
+import { TimeEntriesPanel } from "@/components/TimeEntriesPanel";
 import { CalendarGrid, DayCellData } from "@/components/CalendarGrid";
 import { apiFetch } from "@/lib/api";
 import { useCurrentUser } from "@/lib/useCurrentUser";
@@ -16,11 +17,6 @@ interface TimeEvent {
   eventType: "IN" | "OUT";
   timestamp: string;
   status: string;
-}
-interface TeamMember {
-  id: string;
-  name: string;
-  country: "IRELAND" | "PHILIPPINES";
 }
 interface Notification {
   id: string;
@@ -49,15 +45,6 @@ export default function TimekeepingPage() {
   const isAdmin = user?.role === "ADMIN";
   const isManager = user?.role === "MANAGER";
 
-  // --- Manage time entries: everyone manages their own; Admin can also pick anyone. ---
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
-  const [manageUserId, setManageUserId] = useState<string>("");
-  const [manageEvents, setManageEvents] = useState<TimeEvent[]>([]);
-  const [showAddEntry, setShowAddEntry] = useState(false);
-  const [entryType, setEntryType] = useState<"IN" | "OUT">("IN");
-  const [entryDateTime, setEntryDateTime] = useState("");
-  const [editingEntry, setEditingEntry] = useState<TimeEvent | null>(null);
-  const [editDateTime, setEditDateTime] = useState("");
 
   // --- Personal notifications (everyone) + team missing-clock-out log (Manager/Admin) ---
   const [myNotifications, setMyNotifications] = useState<Notification[]>([]);
@@ -153,26 +140,6 @@ export default function TimekeepingPage() {
     });
   }
 
-  // Manage-entries range follows the calendar's selected month (not a
-  // fixed "last 14 days") — otherwise adding/editing an entry for a
-  // past period (e.g. last month, for a payroll re-check) succeeds but
-  // then never shows up to edit, since it falls outside a fixed window.
-  // Only Admin can call /time/team (Manager/Employee are self-only now),
-  // so everyone else just reads their own log via /time/me.
-  function refreshManageEvents(userId: string, month: Date = monthDate) {
-    if (!userId) return;
-    const from = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth(), 1));
-    const to = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 0, 23, 59, 59));
-    if (isAdmin) {
-      apiFetch<{ events: (TimeEvent & { userId: string })[] }>(`/time/team?range=${from.toISOString()},${to.toISOString()}`)
-        .then(({ events }) => setManageEvents(events.filter((e) => e.userId === userId)))
-        .catch(() => void 0);
-    } else {
-      apiFetch<{ events: TimeEvent[] }>(`/time/me?range=${from.toISOString()},${to.toISOString()}`)
-        .then(({ events }) => setManageEvents(events))
-        .catch(() => void 0);
-    }
-  }
 
   useEffect(() => {
     refreshRecentEvents();
@@ -190,32 +157,17 @@ export default function TimekeepingPage() {
 
   useEffect(() => {
     refreshCalendar();
-    if (manageUserId) refreshManageEvents(manageUserId, monthDate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [monthDate]);
 
   useEffect(() => {
     if (!user) return;
-    if (isAdmin) {
-      apiFetch<{ users: TeamMember[] }>(`/calendar/team?month=${monthDate.getUTCFullYear()}-${String(monthDate.getUTCMonth() + 1).padStart(2, "0")}`)
-        .then(({ users }) => {
-          setTeamMembers(users);
-          setManageUserId((prev) => prev || user.id);
-        })
-        .catch(() => void 0);
-    } else {
-      setManageUserId(user.id);
-    }
     if (isManager || isAdmin) {
       apiFetch<{ notifications: Notification[] }>("/notifications/team-log").then(({ notifications }) => setTeamNotifications(notifications));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin, isManager, user]);
 
-  useEffect(() => {
-    if (manageUserId) refreshManageEvents(manageUserId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manageUserId]);
 
   async function handleClock(type: "IN" | "OUT") {
     const ok = await confirmAction({
@@ -279,52 +231,6 @@ export default function TimekeepingPage() {
     refreshCalendar();
   }
 
-  async function addManualEntry() {
-    if (!manageUserId || !entryDateTime) return;
-    try {
-      await apiFetch("/time/entry", {
-        method: "POST",
-        body: JSON.stringify({
-          userId: manageUserId,
-          eventType: entryType,
-          timestamp: new Date(entryDateTime).toISOString(),
-        }),
-      });
-      setShowAddEntry(false);
-      setEntryDateTime("");
-      refreshManageEvents(manageUserId);
-      notifySuccess("Time entry added");
-    } catch (e) {
-      notifyError("Couldn't add entry", e instanceof Error ? e.message : undefined);
-    }
-  }
-
-  async function saveEditEntry() {
-    if (!editingEntry || !editDateTime) return;
-    try {
-      await apiFetch("/time/correction", {
-        method: "POST",
-        body: JSON.stringify({
-          timeEventId: editingEntry.id,
-          correctedTimestamp: new Date(editDateTime).toISOString(),
-          notes: "Corrected via Timekeeping",
-        }),
-      });
-      setEditingEntry(null);
-      refreshManageEvents(manageUserId);
-      notifySuccess("Time entry updated");
-    } catch (e) {
-      notifyError("Couldn't update entry", e instanceof Error ? e.message : undefined);
-    }
-  }
-
-  async function deleteEntry(id: string) {
-    const ok = await confirmAction({ title: "Delete this time entry?", danger: true, confirmText: "Delete" });
-    if (!ok) return;
-    await apiFetch(`/time/${id}`, { method: "DELETE" });
-    refreshManageEvents(manageUserId);
-    notifySuccess("Time entry deleted");
-  }
 
   const todayHours = useMemo(() => {
     const todayIso = new Date().toISOString().slice(0, 10);
@@ -400,85 +306,14 @@ export default function TimekeepingPage() {
         </div>
       </div>
 
-      <Card className="mt-6">
-        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <div className="text-base font-bold text-chs-charcoal">
-              {isAdmin ? "Manage time entries" : "Manage your time entries"}
-            </div>
-            <div className="text-xs text-gray-400">
-              {isAdmin ? "Add, edit, or delete clock in/out records for any employee" : "Add, edit, or delete your own clock in/out records"} —
-              showing {monthDate.toLocaleDateString("en-IE", { month: "long", year: "numeric", timeZone: "UTC" })}. Use ← Prev / Next → above to
-              change the month.
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {isAdmin && (
-              <select
-                value={manageUserId}
-                onChange={(e) => setManageUserId(e.target.value)}
-                className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal"
-              >
-                {teamMembers.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </select>
-            )}
-            <Button size="sm" icon={<Plus size={14} />} onClick={() => setShowAddEntry(true)}>
-              Add entry
-            </Button>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-gray-100 text-xs uppercase text-gray-400">
-                <th className="py-2">Type</th>
-                <th className="py-2">Timestamp</th>
-                <th className="py-2">Status</th>
-                <th className="py-2" />
-              </tr>
-            </thead>
-            <tbody>
-              {manageEvents.map((e) => (
-                <tr key={e.id} className="border-b border-gray-50">
-                  <td className="py-2.5">{e.eventType === "IN" ? "Clock In" : "Clock Out"}</td>
-                  <td className="py-2.5 text-gray-500">{new Date(e.timestamp).toLocaleString()}</td>
-                  <td className="py-2.5 text-gray-500">{e.status}</td>
-                  <td className="py-2.5 text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        icon={<Pencil size={12} />}
-                        onClick={() => {
-                          setEditingEntry(e);
-                          setEditDateTime(toLocalInputValue(e.timestamp));
-                        }}
-                      >
-                        Edit
-                      </Button>
-                      <Button size="sm" variant="destructive" icon={<Trash2 size={12} />} onClick={() => deleteEntry(e.id)}>
-                        Delete
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {manageEvents.length === 0 && (
-                <tr>
-                  <td colSpan={4} className="py-4 text-sm text-gray-400">
-                    No time entries this month.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+      <TimeEntriesPanel
+        user={user}
+        monthDate={monthDate}
+        onChanged={() => {
+          refreshRecentEvents();
+          refreshCalendar();
+        }}
+      />
 
       {(isManager || isAdmin) && (
         <Card className="mt-6">
@@ -605,73 +440,9 @@ export default function TimekeepingPage() {
         </div>
       )}
 
-      {showAddEntry && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/30 p-4">
-          <Card className="w-full max-w-sm">
-            <div className="text-base font-bold text-chs-charcoal">Add time entry</div>
-            <div className="mt-4 space-y-3">
-              <div>
-                <label className="mb-1 block text-sm font-medium text-chs-charcoal">Type</label>
-                <select
-                  value={entryType}
-                  onChange={(e) => setEntryType(e.target.value as "IN" | "OUT")}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal"
-                >
-                  <option value="IN">Clock In</option>
-                  <option value="OUT">Clock Out</option>
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-sm font-medium text-chs-charcoal">Date & time</label>
-                <input
-                  type="datetime-local"
-                  value={entryDateTime}
-                  onChange={(e) => setEntryDateTime(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal"
-                />
-              </div>
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setShowAddEntry(false)}>
-                Cancel
-              </Button>
-              <Button icon={<Plus size={14} />} onClick={addManualEntry} disabled={!entryDateTime}>
-                Add entry
-              </Button>
-            </div>
-          </Card>
-        </div>
-      )}
 
-      {editingEntry && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/30 p-4">
-          <Card className="w-full max-w-sm">
-            <div className="text-base font-bold text-chs-charcoal">
-              Edit {editingEntry.eventType === "IN" ? "Clock In" : "Clock Out"}
-            </div>
-            <input
-              type="datetime-local"
-              value={editDateTime}
-              onChange={(e) => setEditDateTime(e.target.value)}
-              className="mt-4 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal"
-            />
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setEditingEntry(null)}>
-                Cancel
-              </Button>
-              <Button icon={<Save size={14} />} onClick={saveEditEntry}>Save changes</Button>
-            </div>
-          </Card>
-        </div>
-      )}
     </div>
   );
-}
-
-function toLocalInputValue(iso: string): string {
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function computeHours(events: { eventType: string; timestamp: string }[]): number {

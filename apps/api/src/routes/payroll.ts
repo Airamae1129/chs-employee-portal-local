@@ -14,7 +14,8 @@ import { paidLeaveDayStatusForYear } from "../utils/leave";
  * company-wide (every active employee with a SalaryConfig, any
  * country) instead of Philippines-only, 100% income with no tax,
  * holiday/leave-aware attendance, and a real "Professional Fees" PDF
- * per employee per period. Admin-only (Payroll nav item).
+ * per employee per period. Payroll role only (roles table: Payroll is a
+ * separate role from Admin) — it also owns everyone's salary settings.
  *
  * Attendance for each Mon-Fri date in the period, in priority order:
  *   1. Holiday in the employee's own country OR Ireland (company-wide
@@ -28,7 +29,72 @@ import { paidLeaveDayStatusForYear } from "../utils/leave";
  *   5. Otherwise -> absence, that day is not paid.
  */
 export const payrollRouter = Router();
-payrollRouter.use(requireAuth, allow("ADMIN"));
+payrollRouter.use(requireAuth, allow("PAYROLL"));
+
+/**
+ * GET /payroll/staff — active staff with their salary settings, for the
+ * Payroll page. Viewing other people's salaries is audit-logged.
+ */
+payrollRouter.get("/staff", async (req, res) => {
+  const users = await db
+    .selectFrom("User")
+    .select(["id", "name", "email", "country", "role", "jobTitle"])
+    .where("status", "=", "ACTIVE")
+    .orderBy("name", "asc")
+    .execute();
+  const salaries = await db.selectFrom("SalaryConfig").select(["userId", "salaryType", "baseRate", "allowances", "currency"]).execute();
+  const byUser = new Map(salaries.map((s) => [s.userId, s]));
+  await writeAuditLog({ userId: req.user!.sub, action: "SalariesViewed", metadata: { count: salaries.length } });
+  res.json({
+    users: users.map((u) => {
+      const s = byUser.get(u.id);
+      return { ...u, salary: s?.baseRate ?? null, salaryType: s?.salaryType ?? null, allowances: s?.allowances ?? null, salaryCurrency: s?.currency ?? null };
+    }),
+  });
+});
+
+const salarySchema = z.object({
+  salary: z.coerce.number().positive(),
+  allowances: z.coerce.number().min(0).optional(),
+});
+
+/** PUT /payroll/salary/:userId — set or change someone's monthly salary (never your own). */
+payrollRouter.put("/salary/:userId", async (req, res) => {
+  const parsed = salarySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Enter a salary greater than 0" });
+  if (req.params.userId === req.user!.sub) {
+    return res.status(403).json({ error: "You can't set your own salary — another Payroll user has to." });
+  }
+  const user = await db.selectFrom("User").select(["id", "country"]).where("id", "=", req.params.userId).executeTakeFirst();
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  const now = new Date();
+  const standardWorkingDays = countWeekdaysInMonth(now.getFullYear(), now.getMonth() + 1);
+  const currency = user.country === "IRELAND" ? "EUR" : "PHP";
+  const existing = await db.selectFrom("SalaryConfig").selectAll().where("userId", "=", user.id).executeTakeFirst();
+  const values = {
+    baseRate: String(parsed.data.salary),
+    ...(parsed.data.allowances !== undefined ? { allowances: String(parsed.data.allowances) } : {}),
+    standardWorkingDays,
+    currency,
+  };
+  if (existing) {
+    await db.updateTable("SalaryConfig").set({ ...values, updatedAt: now }).where("userId", "=", user.id).execute();
+  } else {
+    await db.insertInto("SalaryConfig").values({ userId: user.id, salaryType: "MONTHLY", ...values }).execute();
+  }
+  await writeAuditLog({
+    userId: req.user!.sub,
+    action: "SalaryUpdated",
+    targetId: user.id,
+    metadata: {
+      from: existing ? { salary: existing.baseRate, allowances: existing.allowances } : null,
+      to: { salary: values.baseRate, allowances: values.allowances ?? existing?.allowances ?? "0" },
+      currency,
+    },
+  });
+  res.json({ ok: true });
+});
 
 async function unpaidLeaveDatesInRange(employeeId: string, from: string, to: string): Promise<Set<string>> {
   const requests = await db

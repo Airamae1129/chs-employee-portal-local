@@ -1,16 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Trash2, Download, Eye, Check, Send, PlayCircle, Upload } from "lucide-react";
+import { Trash2, Download, Eye, Check, Send, PlayCircle, Upload, Save } from "lucide-react";
 import { PageHeader, Card, Badge } from "@/components/PageHeader";
 import { Button } from "@/components/Button";
 import { apiFetch, API_URL } from "@/lib/api";
 import { notifySuccess, notifyError, confirmAction } from "@/lib/alerts";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 
 interface StaffUser {
   id: string;
   name: string;
   country: "IRELAND" | "PHILIPPINES";
+  jobTitle?: string | null;
+  salary: string | null;
+  allowances: string | null;
+  salaryCurrency: string | null;
 }
 interface GeneratedPayslip {
   id: string;
@@ -40,8 +45,14 @@ const STATUS_TONE: Record<string, "gray" | "gold" | "green" | "red"> = {
 };
 const CURRENCY_SYMBOL: Record<string, string> = { EUR: "€", PHP: "₱" };
 
+/**
+ * Payroll (Payroll role only — separate from Admin per the roles table):
+ * salaries, payroll runs, approval/publishing, and Ireland payslip uploads.
+ */
 export default function AdminPayrollPage() {
+  const { user: me } = useCurrentUser();
   const [users, setUsers] = useState<StaffUser[]>([]);
+  const [salaryDraft, setSalaryDraft] = useState<Record<string, { salary: string; allowances: string }>>({});
   const [period, setPeriod] = useState(() => new Date().toISOString().slice(0, 7));
   const [payslips, setPayslips] = useState<GeneratedPayslip[]>([]);
   const [running, setRunning] = useState(false);
@@ -52,8 +63,30 @@ export default function AdminPayrollPage() {
   const [uploading, setUploading] = useState(false);
   const [ieUploads, setIeUploads] = useState<IrelandPayslip[]>([]);
 
+  // Staff + salaries load once (viewing them is audit-logged); payslips follow the period.
+  function refreshStaff() {
+    apiFetch<{ users: StaffUser[] }>("/payroll/staff").then(({ users }) => {
+      setUsers(users);
+      setSalaryDraft(Object.fromEntries(users.map((u) => [u.id, { salary: u.salary ?? "", allowances: u.allowances ?? "" }])));
+    });
+  }
+  useEffect(refreshStaff, []);
+
+  async function saveSalary(u: StaffUser) {
+    const draft = salaryDraft[u.id];
+    try {
+      await apiFetch(`/payroll/salary/${u.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ salary: Number(draft.salary), allowances: draft.allowances === "" ? undefined : Number(draft.allowances) }),
+      });
+      refreshStaff();
+      notifySuccess("Salary saved", `${u.name}'s salary has been updated.`);
+    } catch (e) {
+      notifyError("Couldn't save salary", e instanceof Error ? e.message : undefined);
+    }
+  }
+
   function refresh() {
-    apiFetch<{ users: StaffUser[] }>("/users").then(({ users }) => setUsers(users));
     apiFetch<{ payslips: GeneratedPayslip[] }>(`/payroll/summary?period=${period}`).then(({ payslips }) => setPayslips(payslips));
     apiFetch<{ ireland: IrelandPayslip[] }>("/payslips/team").then(({ ireland }) => setIeUploads(ireland.filter((p) => p.period === period)));
   }
@@ -251,6 +284,78 @@ export default function AdminPayrollPage() {
             ))}
           </div>
         )}
+      </Card>
+
+      <Card className="mt-6">
+        <div className="mb-1 text-base font-bold text-chs-charcoal">Salaries</div>
+        <p className="mb-4 text-xs text-gray-400">
+          Monthly base salary and allowances used by payroll runs. Only Payroll can see or change these, every view and change is recorded
+          in the audit log, and nobody can change their own salary.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-gray-100 text-xs uppercase text-gray-400">
+                <th className="py-2">Employee</th>
+                <th className="py-2">Country</th>
+                <th className="py-2">Monthly salary</th>
+                <th className="py-2">Allowances</th>
+                <th className="py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((u) => {
+                const self = u.id === me?.id;
+                const draft = salaryDraft[u.id] ?? { salary: "", allowances: "" };
+                const currency = u.country === "IRELAND" ? "EUR" : "PHP";
+                const changed = draft.salary !== (u.salary ?? "") || draft.allowances !== (u.allowances ?? "");
+                return (
+                  <tr key={u.id} className="border-b border-gray-50">
+                    <td className="py-2.5">
+                      {u.name}
+                      {u.jobTitle ? <span className="ml-1.5 text-xs text-gray-400">{u.jobTitle}</span> : null}
+                    </td>
+                    <td className="py-2.5 text-gray-500">{u.country}</td>
+                    <td className="py-2.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-gray-400">{CURRENCY_SYMBOL[currency]}</span>
+                        <input
+                          type="number"
+                          min={0}
+                          disabled={self}
+                          value={draft.salary}
+                          onChange={(e) => setSalaryDraft({ ...salaryDraft, [u.id]: { ...draft, salary: e.target.value } })}
+                          placeholder="Not set"
+                          className="w-32 rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-chs-charcoal disabled:bg-gray-50 disabled:text-gray-400"
+                        />
+                      </div>
+                    </td>
+                    <td className="py-2.5">
+                      <input
+                        type="number"
+                        min={0}
+                        disabled={self}
+                        value={draft.allowances}
+                        onChange={(e) => setSalaryDraft({ ...salaryDraft, [u.id]: { ...draft, allowances: e.target.value } })}
+                        placeholder="0"
+                        className="w-28 rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-chs-charcoal disabled:bg-gray-50 disabled:text-gray-400"
+                      />
+                    </td>
+                    <td className="py-2.5 text-right">
+                      {self ? (
+                        <span className="text-xs text-gray-400">Set by another Payroll user</span>
+                      ) : (
+                        <Button size="sm" variant="secondary" icon={<Save size={12} />} onClick={() => saveSalary(u)} disabled={!changed || !(Number(draft.salary) > 0)}>
+                          Save
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </Card>
     </div>
   );

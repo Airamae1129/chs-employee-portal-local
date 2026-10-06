@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, ExternalLink, FileText, Folder, FolderOpen, Link2, Pencil, Plus, Save, Trash2, Upload } from "lucide-react";
-import { PageHeader, Card } from "@/components/PageHeader";
+import { Check, ChevronDown, ChevronRight, ExternalLink, FileText, Folder, FolderOpen, KeyRound, Link2, Lock, Pencil, Plus, Save, Trash2, Upload, X } from "lucide-react";
+import { PageHeader, Card, Badge } from "@/components/PageHeader";
 import { Button } from "@/components/Button";
 import { apiFetch, API_URL } from "@/lib/api";
 import { useCurrentUser } from "@/lib/useCurrentUser";
@@ -21,12 +21,26 @@ interface Workspace {
   id: string;
   clientName: string;
   description: string | null;
+  hasAccess: boolean;
+  myAccessRequest: { id: string; status: "REQUESTED" | "APPROVED" | "REJECTED" } | null;
   items: WorkspaceItem[];
+}
+interface AccessRequest {
+  id: string;
+  requestedAt: string;
+  workspace?: { clientName: string };
+  user?: { name: string; email: string };
 }
 
 const INPUT = "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-chs-charcoal";
 
-/** Client Workspaces — one folder per client, each holding that client's documents (links or files). */
+/**
+ * Client Workspaces — one folder per client, each holding that client's
+ * documents (links or files). Roles table: everyone sees the client list
+ * but only opens links for clients they're assigned to (request access →
+ * approved by a Manager assigned to that client, or an Admin); only Admin
+ * adds, edits or deletes clients and links.
+ */
 export default function WorkspacesPage() {
   const { user } = useCurrentUser();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -47,10 +61,41 @@ export default function WorkspacesPage() {
   const [saving, setSaving] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  const isElevated = user?.role === "MANAGER" || user?.role === "ADMIN";
+  const canManage = user?.role === "ADMIN";
+  const canApprove = user?.role === "MANAGER" || user?.role === "ADMIN";
+  const [accessRequests, setAccessRequests] = useState<AccessRequest[]>([]);
 
   function refresh() {
     apiFetch<{ workspaces: Workspace[] }>("/workspaces").then(({ workspaces }) => setWorkspaces(workspaces));
+    if (canApprove) {
+      apiFetch<{ requests: AccessRequest[] }>("/workspaces/requests/pending").then(({ requests }) => setAccessRequests(requests)).catch(() => void 0);
+    }
+  }
+
+  async function requestAccess(w: Workspace) {
+    try {
+      await apiFetch(`/workspaces/${w.id}/request-access`, { method: "POST" });
+      refresh();
+      notifySuccess("Access requested", `A Manager assigned to ${w.clientName} or an Admin will review it.`);
+    } catch (e) {
+      notifyError("Couldn't request access", e instanceof Error ? e.message : undefined);
+    }
+  }
+
+  async function decideAccess(r: AccessRequest, decision: "APPROVED" | "REJECTED") {
+    const ok = await confirmAction({
+      title: `${decision === "APPROVED" ? "Approve" : "Reject"} ${r.user?.name ?? "this"} access to ${r.workspace?.clientName ?? "this client"}?`,
+      confirmText: decision === "APPROVED" ? "Approve" : "Reject",
+      danger: decision === "REJECTED",
+    });
+    if (!ok) return;
+    try {
+      await apiFetch(`/workspaces/requests/${r.id}/decision`, { method: "PATCH", body: JSON.stringify({ decision }) });
+      refresh();
+      notifySuccess(decision === "APPROVED" ? "Access granted" : "Request rejected");
+    } catch (e) {
+      notifyError("Couldn't save decision", e instanceof Error ? e.message : undefined);
+    }
   }
   useEffect(() => {
     if (user) refresh();
@@ -177,7 +222,7 @@ export default function WorkspacesPage() {
     <div>
       <PageHeader title="Client Workspaces" />
 
-      {isElevated && (
+      {canManage && (
         <div className="mb-6">
           <Button icon={<Plus size={16} />} onClick={() => setShowAddClient(true)}>
             Add Client
@@ -185,24 +230,80 @@ export default function WorkspacesPage() {
         </div>
       )}
 
+      {canApprove && accessRequests.length > 0 && (
+        <Card className="mb-6">
+          <div className="mb-1 flex items-center gap-2 text-base font-bold text-chs-charcoal">
+            <KeyRound size={16} className="text-chs-gold" />
+            Access requests to approve
+          </div>
+          <p className="mb-4 text-xs text-gray-400">
+            {user.role === "MANAGER" ? "For clients you're assigned to." : "For every client."} Your own requests are approved by someone else.
+          </p>
+          <div className="space-y-2">
+            {accessRequests.map((r) => (
+              <div key={r.id} className="flex flex-col gap-2 rounded-lg bg-chs-bg px-3 py-2 text-sm sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <span className="font-medium text-chs-charcoal">{r.user?.name}</span>
+                  <span className="text-gray-500"> wants access to </span>
+                  <span className="font-medium text-chs-charcoal">{r.workspace?.clientName}</span>
+                  <div className="text-xs text-gray-400">{new Date(r.requestedAt).toLocaleString()}</div>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="success" icon={<Check size={12} />} onClick={() => decideAccess(r, "APPROVED")}>
+                    Approve
+                  </Button>
+                  <Button size="sm" variant="destructive" icon={<X size={12} />} onClick={() => decideAccess(r, "REJECTED")}>
+                    Reject
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       <div className="space-y-4">
         {workspaces.map((w) => {
-          const isOpen = expanded[w.id] ?? false;
+          const isOpen = (expanded[w.id] ?? false) && w.hasAccess;
+          const req = w.myAccessRequest;
           return (
             <Card key={w.id}>
               <div className="flex items-center justify-between gap-3">
-                <button onClick={() => setExpanded((prev) => ({ ...prev, [w.id]: !isOpen }))} className="flex min-w-0 items-center gap-2 text-left">
-                  {isOpen ? <ChevronDown size={16} className="shrink-0 text-gray-400" /> : <ChevronRight size={16} className="shrink-0 text-gray-400" />}
+                <button
+                  onClick={() => w.hasAccess && setExpanded((prev) => ({ ...prev, [w.id]: !isOpen }))}
+                  className={`flex min-w-0 items-center gap-2 text-left ${w.hasAccess ? "" : "cursor-default"}`}
+                >
+                  {!w.hasAccess ? (
+                    <Lock size={16} className="shrink-0 text-gray-300" />
+                  ) : isOpen ? (
+                    <ChevronDown size={16} className="shrink-0 text-gray-400" />
+                  ) : (
+                    <ChevronRight size={16} className="shrink-0 text-gray-400" />
+                  )}
                   {isOpen ? <FolderOpen size={20} className="shrink-0 text-chs-gold" /> : <Folder size={20} className="shrink-0 text-chs-gold" />}
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold text-chs-charcoal">{w.clientName}</div>
                     <div className="text-xs text-gray-400">
-                      {w.items.length} document{w.items.length === 1 ? "" : "s"}
+                      {w.hasAccess ? `${w.items.length} document${w.items.length === 1 ? "" : "s"}` : "Not assigned"}
                       {w.description ? ` · ${w.description}` : ""}
                     </div>
                   </div>
                 </button>
-                {isElevated && (
+                {!w.hasAccess && (
+                  <div className="flex shrink-0 items-center gap-2">
+                    {req?.status === "REQUESTED" ? (
+                      <Badge tone="gold">Access requested</Badge>
+                    ) : (
+                      <>
+                        {req?.status === "REJECTED" && <Badge tone="red">Rejected</Badge>}
+                        <Button size="sm" variant="secondary" icon={<KeyRound size={12} />} onClick={() => requestAccess(w)}>
+                          {req?.status === "REJECTED" ? "Request again" : "Request access"}
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                )}
+                {canManage && (
                   <div className="flex shrink-0 items-center gap-3">
                     <button onClick={() => setEditingClient(w)} className="text-gray-400 hover:text-chs-gold" aria-label="Edit client">
                       <Pencil size={15} />
@@ -227,23 +328,25 @@ export default function WorkspacesPage() {
                           </button>
                           {(item.description || item.fileName) && <div className="truncate text-xs text-gray-400">{item.description || item.fileName}</div>}
                         </div>
-                        <div className="flex shrink-0 items-center gap-3">
-                          <button onClick={() => openItemForm(w.id, item)} className="text-gray-400 hover:text-chs-gold" aria-label="Edit document">
-                            <Pencil size={14} />
-                          </button>
-                          {isElevated && (
+                        {canManage && (
+                          <div className="flex shrink-0 items-center gap-3">
+                            <button onClick={() => openItemForm(w.id, item)} className="text-gray-400 hover:text-chs-gold" aria-label="Edit document">
+                              <Pencil size={14} />
+                            </button>
                             <button onClick={() => removeItem(w.id, item)} className="text-gray-400 hover:text-red-500" aria-label="Delete document">
                               <Trash2 size={14} />
                             </button>
-                          )}
-                        </div>
+                          </div>
+                        )}
                       </div>
                     ))}
                     {w.items.length === 0 && <div className="text-sm text-gray-400">No documents in this folder yet.</div>}
                   </div>
-                  <Button size="sm" variant="secondary" icon={<Plus size={14} />} className="mt-3" onClick={() => openItemForm(w.id)}>
-                    Add document
-                  </Button>
+                  {canManage && (
+                    <Button size="sm" variant="secondary" icon={<Plus size={14} />} className="mt-3" onClick={() => openItemForm(w.id)}>
+                      Add document
+                    </Button>
+                  )}
                 </div>
               )}
             </Card>

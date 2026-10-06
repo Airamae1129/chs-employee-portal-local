@@ -102,6 +102,36 @@ clock event). Swap the `fetch()` call for a Microsoft Graph
 per-team routing or threaded corrections later — the payload builder and
 retry wrapper stay the same.
 
+### Roles and permissions
+
+Access follows the roles table from UAT / IT audit. Four roles: Employee,
+Manager, Admin and **Payroll** (a separate role, held by someone other
+than the Admin). Rules, all enforced on the server:
+
+- **Deny by default.** Every route lists the roles allowed to call it,
+  and the role is re-read from the database on every request, so
+  deactivating someone or changing their role takes effect immediately.
+- **Salaries and payroll belong to Payroll.** Only Payroll views or sets
+  salaries, runs/approves/publishes payroll, uploads payslips and views
+  other people's payslips. Everyone (Admin included) sees their own
+  salary and payslips only. Nobody sets their own salary.
+- **Nobody approves their own request or correction.** Managers decide
+  for their direct reports, Admins for everyone else. A Manager's or
+  Admin's own requests go to someone else.
+- **Time records aren't edited by their owner.** Staff send a correction
+  request with a reason; their manager or an Admin approves it. Managers
+  (team) and Admins can edit another person's entry, with a reason.
+- **Admin only:** staff accounts and roles, leave allowance, COE/HR
+  letters, policies, client folders and links, holidays, audit log.
+- **Client links** are visible only to people assigned to that client
+  (approved access request).
+- **Ten wrong passwords lock sign-in** for 30 minutes (or until a password
+  reset).
+- **The audit log is append-only** — a database trigger blocks edits and
+  deletes. Every action marked "Log: Yes" in the roles table is recorded.
+
+Review roles whenever staff join, move or leave. No shared accounts.
+
 ### Sign-in MFA and password reset
 
 Every sign-in has two steps: password, then a 6-digit code. Every

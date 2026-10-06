@@ -20,7 +20,7 @@ interface Employee {
   id: string;
   name: string;
   email: string;
-  role: "EMPLOYEE" | "MANAGER" | "ADMIN";
+  role: "EMPLOYEE" | "MANAGER" | "ADMIN" | "PAYROLL";
   country: "IRELAND" | "PHILIPPINES";
   status: "ACTIVE" | "INACTIVE";
   birthday: string | null;

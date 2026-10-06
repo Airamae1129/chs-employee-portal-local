@@ -104,20 +104,21 @@ retry wrapper stay the same.
 
 ### Sign-in MFA and password reset
 
-Every sign-in has two steps: password, then a 6-digit code. The first
-time each account signs in (all existing accounts included), it must set
-up MFA by choosing either:
+Every sign-in has two steps: password, then a 6-digit code. Every
+account (existing ones included) must first link an **authenticator app**
+(Microsoft/Google Authenticator, Authy, etc.) by scanning the QR code
+shown after the password; email codes aren't offered until that's done.
+Once the app is linked, sign-in offers a choice of:
 
-- **Email code**: a code is emailed at each sign-in, or
-- **Authenticator app**: Microsoft/Google Authenticator, Authy, etc.
-  (scan the QR code shown during setup).
+- **Authenticator app** code, or
+- **Email code** sent to the user's inbox.
 
-Emailed codes always remain available as a backup, so a lost phone
-never locks anyone out. Users can switch methods or change their
-password under **Account Security** (`/account/security`); a password
-change needs a code emailed to them. "Forgot your password?" on the
-sign-in page emails a 6-digit code, which must be entered before the
-new-password form appears.
+Users can link a new phone or change their password under **Account
+Security** (`/account/security`); a password change needs a code emailed
+to them. "Forgot your password?" on the sign-in page lets users verify
+with an emailed code or their authenticator app code before the
+new-password form appears. A new password can't be the same as the
+current one.
 
 Codes expire after 10 minutes, work once, and allow 5 tries; 5 wrong
 MFA codes in a row lock sign-in for 15 minutes. Emails need the

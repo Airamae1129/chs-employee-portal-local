@@ -146,10 +146,11 @@ async function trySendEmailCode(res: import("express").Response, user: UserRow, 
  * backend authenticates on email/password, then requires a second
  * factor before issuing a session carrying the account's real role.
  *
- * Accounts that haven't enrolled in MFA yet (every account the first
- * time) get stage "SETUP" and must pick email or an authenticator app;
- * enrolled accounts get stage "VERIFY". Either way the browser gets a
- * 10-minute mfaToken, not a session.
+ * Accounts without a linked authenticator app get stage "SETUP": they
+ * must scan the QR code and confirm an app code before anything else —
+ * email codes aren't offered until the app is set up. Accounts with an
+ * app get stage "VERIFY" and may use either an app code or an emailed
+ * code. Either way the browser gets a 10-minute mfaToken, not a session.
  */
 authRouter.post("/login", async (req, res) => {
   if (!env.allowPasswordLogin) {
@@ -184,29 +185,24 @@ authRouter.post("/login", async (req, res) => {
   const locked = mfaLockedMessage(user);
   if (locked) return res.status(429).json({ error: locked });
 
-  const enrolled = !!user.mfaEnrolledAt;
-  const method = enrolled && user.mfaMethod === "TOTP" && user.totpSecret ? "TOTP" : "EMAIL";
-
-  // Enrolled email users get their code straight away; everyone else
-  // chooses first (setup) or has an app code ready (TOTP).
-  let emailSent = false;
-  if (enrolled && method === "EMAIL") {
-    const result = await trySendEmailCode(res, user, "LOGIN_MFA");
-    if (result === null) return;
-    emailSent = true;
-  }
+  const enrolled = hasAuthenticator(user);
 
   await writeAuditLog({ userId: user.id, action: "LoginPasswordAccepted" });
   res.json({
     mfaRequired: true,
     stage: enrolled ? "VERIFY" : "SETUP",
     mfaToken: issueChallenge({ kind: "mfa", sub: user.id }, 10),
-    method,
-    totpAvailable: !!user.totpSecret,
+    method: "TOTP",
+    totpAvailable: enrolled,
     maskedEmail: maskEmail(user.email),
-    emailSent,
+    emailSent: false,
   });
 });
+
+/** MFA counts as set up only once an authenticator app is linked; email codes are a fallback after that. */
+function hasAuthenticator(user: UserRow): boolean {
+  return !!user.totpSecret;
+}
 
 async function userFromMfaToken(req: import("express").Request, res: import("express").Response) {
   const challenge = readChallenge(req.body?.mfaToken, "mfa");
@@ -227,10 +223,13 @@ async function userFromMfaToken(req: import("express").Request, res: import("exp
   return user;
 }
 
-/** POST /auth/mfa/email — send (or resend) a sign-in code by email. */
+/** POST /auth/mfa/email — send (or resend) a sign-in code by email. Only once an app is set up. */
 authRouter.post("/mfa/email", async (req, res) => {
   const user = await userFromMfaToken(req, res);
   if (!user) return;
+  if (!hasAuthenticator(user)) {
+    return res.status(400).json({ error: "Set up your authenticator app first. Email codes are available after that." });
+  }
   const result = await trySendEmailCode(res, user, "LOGIN_MFA");
   if (result === null) return;
   if (result === "throttled") {
@@ -243,8 +242,8 @@ authRouter.post("/mfa/email", async (req, res) => {
 authRouter.post("/mfa/totp/start", async (req, res) => {
   const user = await userFromMfaToken(req, res);
   if (!user) return;
-  if (user.mfaEnrolledAt) {
-    return res.status(400).json({ error: "MFA is already set up. Change it from Account Security after signing in." });
+  if (hasAuthenticator(user)) {
+    return res.status(400).json({ error: "Your authenticator app is already set up. Link a new phone from Account Security after signing in." });
   }
   const secret = generateTotpSecret();
   await db.updateTable("User").set({ totpPendingSecret: secret }).where("id", "=", user.id).execute();
@@ -259,8 +258,8 @@ const mfaVerifySchema = z.object({
 
 /**
  * POST /auth/mfa/verify — checks the second factor and issues the session.
- * For an account still in setup, a correct code also completes enrolment
- * with the chosen method.
+ * For an account still in setup, only an app code from the QR just
+ * scanned is accepted, and it completes enrolment.
  */
 authRouter.post("/mfa/verify", async (req, res) => {
   const parsed = mfaVerifySchema.safeParse(req.body);
@@ -268,7 +267,10 @@ authRouter.post("/mfa/verify", async (req, res) => {
   const user = await userFromMfaToken(req, res);
   if (!user) return;
   const { method, code } = parsed.data;
-  const enrolling = !user.mfaEnrolledAt;
+  const enrolling = !hasAuthenticator(user);
+  if (enrolling && method !== "TOTP") {
+    return res.status(400).json({ error: "Set up your authenticator app first. Email codes are available after that." });
+  }
 
   let ok = false;
   let totpStep: number | null = null;
@@ -293,11 +295,7 @@ authRouter.post("/mfa/verify", async (req, res) => {
       mfaLockedUntil: null,
       ...(totpStep !== null ? { totpLastUsedStep: totpStep } : {}),
       ...(enrolling
-        ? {
-            mfaEnrolledAt: new Date(),
-            mfaMethod: method,
-            ...(method === "TOTP" ? { totpSecret: user.totpPendingSecret, totpPendingSecret: null } : {}),
-          }
+        ? { mfaEnrolledAt: new Date(), mfaMethod: "TOTP" as const, totpSecret: user.totpPendingSecret, totpPendingSecret: null }
         : {}),
     })
     .where("id", "=", user.id)
@@ -345,23 +343,6 @@ authRouter.post("/security/totp/confirm", requireAuth, async (req, res) => {
     .where("id", "=", user.id)
     .execute();
   await writeAuditLog({ userId: user.id, action: "MfaAuthenticatorLinked" });
-  res.json({ ok: true });
-});
-
-/** POST /auth/security/use-email — switch to emailed codes (removes the app link). Needs the password. */
-authRouter.post("/security/use-email", requireAuth, async (req, res) => {
-  const password = z.string().min(1).safeParse(req.body?.password);
-  if (!password.success) return res.status(400).json({ error: "Enter your current password." });
-  const user = await findUserById(req.user!.sub);
-  if (!user?.passwordHash || !(await bcrypt.compare(password.data, user.passwordHash))) {
-    return res.status(401).json({ error: "Current password is incorrect." });
-  }
-  await db
-    .updateTable("User")
-    .set({ mfaMethod: "EMAIL", totpSecret: null, totpPendingSecret: null, totpLastUsedStep: null })
-    .where("id", "=", user.id)
-    .execute();
-  await writeAuditLog({ userId: user.id, action: "MfaSwitchedToEmail" });
   res.json({ ok: true });
 });
 

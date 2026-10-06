@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Mail, ShieldCheck, Smartphone } from "lucide-react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { AUTH_SUBMIT_CLASS, CodeInput } from "./LoginSplit";
@@ -19,15 +19,16 @@ interface TotpSetup {
   qrDataUrl: string;
 }
 
-type View = "choose" | "EMAIL" | "TOTP";
+type Method = "TOTP" | "EMAIL";
 
 const RESEND_SECONDS = 60;
 
 /**
- * The second sign-in step. "SETUP" (no MFA yet — every account the first
- * time) makes the user pick email or an authenticator app and prove it
- * works; "VERIFY" asks for a code from the method they set up, with
- * emailed codes always available as a fallback.
+ * The second sign-in step.
+ *
+ * "SETUP" (no authenticator app linked yet): the user must scan the QR
+ * code and confirm an app code — email codes aren't offered until then.
+ * "VERIFY" (app linked): the user picks an app code or an emailed code.
  */
 export function MfaChallenge({
   start,
@@ -39,13 +40,14 @@ export function MfaChallenge({
   onCancel: () => void;
 }) {
   const enrolling = start.stage === "SETUP";
-  const [view, setView] = useState<View>(enrolling ? "choose" : start.method);
+  const [method, setMethod] = useState<Method>("TOTP");
   const [code, setCode] = useState("");
   const [totp, setTotp] = useState<TotpSetup | null>(null);
-  const [emailSentAt, setEmailSentAt] = useState<number | null>(start.emailSent ? Date.now() : null);
+  const [emailSentAt, setEmailSentAt] = useState<number | null>(null);
   const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const setupStarted = useRef(false);
 
   useEffect(() => {
     if (!emailSentAt) return;
@@ -66,6 +68,16 @@ export function MfaChallenge({
     }
   }
 
+  // Setup goes straight to the QR code — there's nothing to choose yet.
+  useEffect(() => {
+    if (!enrolling || setupStarted.current) return;
+    setupStarted.current = true;
+    run(async () => {
+      setTotp(await apiFetch<TotpSetup>("/auth/mfa/totp/start", { method: "POST", body: JSON.stringify({ mfaToken: start.mfaToken }) }));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enrolling, start.mfaToken]);
+
   const sendEmail = () =>
     run(async () => {
       await apiFetch("/auth/mfa/email", { method: "POST", body: JSON.stringify({ mfaToken: start.mfaToken }) });
@@ -73,20 +85,12 @@ export function MfaChallenge({
       setNow(Date.now());
     });
 
-  function chooseEmail() {
-    setView("EMAIL");
+  function pick(next: Method) {
+    if (next === method) return;
+    setMethod(next);
     setCode("");
-    if (!emailSentAt) sendEmail();
-  }
-
-  function chooseApp() {
-    setView("TOTP");
-    setCode("");
-    if (enrolling && !totp) {
-      run(async () => {
-        setTotp(await apiFetch<TotpSetup>("/auth/mfa/totp/start", { method: "POST", body: JSON.stringify({ mfaToken: start.mfaToken }) }));
-      });
-    }
+    setError(null);
+    if (next === "EMAIL" && !emailSentAt) sendEmail();
   }
 
   function verify(e: FormEvent) {
@@ -94,7 +98,7 @@ export function MfaChallenge({
     run(async () => {
       const { user } = await apiFetch<{ user: { mustResetPassword: boolean } }>("/auth/mfa/verify", {
         method: "POST",
-        body: JSON.stringify({ mfaToken: start.mfaToken, method: view, code }),
+        body: JSON.stringify({ mfaToken: start.mfaToken, method, code }),
       });
       onVerified(user);
     });
@@ -107,96 +111,66 @@ export function MfaChallenge({
         <span className="text-xs font-semibold uppercase tracking-widest">Two-step verification</span>
       </div>
 
-      {view === "choose" ? (
-        <>
-          <h2 className="text-2xl font-bold text-chs-charcoal">Set up sign-in protection</h2>
-          <p className="mt-1 text-sm text-gray-500">
-            Every CHS account now needs a second step at sign-in. Choose how you'll get your 6-digit codes.
-          </p>
-          <div className="mt-6 space-y-3">
-            <MethodButton
-              icon={<Mail size={20} />}
-              title="Email me a code"
-              detail={`Sent to ${start.maskedEmail} each time you sign in.`}
-              onClick={chooseEmail}
-            />
-            <MethodButton
-              icon={<Smartphone size={20} />}
-              title="Authenticator app"
-              detail="Microsoft Authenticator, Google Authenticator, Authy or similar."
-              onClick={chooseApp}
-            />
-          </div>
-        </>
-      ) : (
-        <form onSubmit={verify} className="space-y-5">
-          {view === "EMAIL" ? (
-            <div>
-              <h2 className="text-2xl font-bold text-chs-charcoal">Check your email</h2>
-              <p className="mt-1 text-sm text-gray-500">
-                {emailSentAt ? `We sent a 6-digit code to ${start.maskedEmail}. It expires in 10 minutes.` : "Sending your code..."}
-              </p>
-            </div>
-          ) : enrolling ? (
-            <div>
-              <h2 className="text-2xl font-bold text-chs-charcoal">Link your authenticator app</h2>
-              <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-gray-500">
-                <li>In your app, add an account and scan this QR code.</li>
-                <li>Enter the 6-digit code the app shows.</li>
-              </ol>
-              {totp ? (
-                <div className="mt-4 flex flex-col items-center gap-2 rounded-xl border border-gray-200 p-4">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={totp.qrDataUrl} alt="Authenticator QR code" width={176} height={176} />
-                  <div className="text-center text-xs text-gray-500">
-                    Can't scan? Enter this key:
-                    <div className="mt-1 select-all break-all font-mono text-sm text-chs-charcoal">{totp.secret}</div>
-                  </div>
+      <form onSubmit={verify} className="space-y-5">
+        {enrolling ? (
+          <div>
+            <h2 className="text-2xl font-bold text-chs-charcoal">Set up your authenticator app</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Every CHS account needs an authenticator app (Microsoft Authenticator, Google Authenticator, Authy or similar) before signing in.
+            </p>
+            <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm text-gray-500">
+              <li>In your app, add an account and scan this QR code.</li>
+              <li>Enter the 6-digit code the app shows.</li>
+            </ol>
+            {totp ? (
+              <div className="mt-4 flex flex-col items-center gap-2 rounded-xl border border-gray-200 p-4">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={totp.qrDataUrl} alt="Authenticator QR code" width={176} height={176} />
+                <div className="text-center text-xs text-gray-500">
+                  Can't scan? Enter this key:
+                  <div className="mt-1 select-all break-all font-mono text-sm text-chs-charcoal">{totp.secret}</div>
                 </div>
-              ) : (
-                <div className="mt-4 h-48 animate-pulse rounded-xl bg-gray-100" />
-              )}
-            </div>
-          ) : (
-            <div>
-              <h2 className="text-2xl font-bold text-chs-charcoal">Enter your app code</h2>
-              <p className="mt-1 text-sm text-gray-500">Open your authenticator app and enter the 6-digit code for CHS Employee Portal.</p>
-            </div>
-          )}
-
-          <CodeInput value={code} onChange={setCode} />
-
-          {error ? <div className="rounded-lg bg-red-50 px-4 py-2.5 text-sm text-red-600">{error}</div> : null}
-
-          <button type="submit" disabled={busy || code.length !== 6} className={AUTH_SUBMIT_CLASS}>
-            <ShieldCheck size={16} />
-            {busy ? "Checking..." : enrolling ? "Verify & finish setup" : "Verify"}
-          </button>
-
-          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-            {view === "EMAIL" ? (
-              <button type="button" disabled={busy || resendIn > 0} onClick={sendEmail} className="font-medium text-chs-charcoal hover:underline disabled:text-gray-400 disabled:no-underline">
-                {resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}
-              </button>
+              </div>
             ) : (
-              <button type="button" disabled={busy} onClick={chooseEmail} className="font-medium text-chs-charcoal hover:underline">
-                Email me a code instead
-              </button>
+              <div className="mt-4 h-48 animate-pulse rounded-xl bg-gray-100" />
             )}
-            {enrolling ? (
-              <button type="button" onClick={() => { setView("choose"); setError(null); }} className="text-gray-500 hover:underline">
-                Choose another method
-              </button>
-            ) : view === "EMAIL" && start.totpAvailable ? (
-              <button type="button" onClick={() => { setView("TOTP"); setCode(""); setError(null); }} className="text-gray-500 hover:underline">
-                Use authenticator app
-              </button>
-            ) : null}
+            <p className="mt-3 text-xs text-gray-400">After this, you can sign in with an app code or a code sent to {start.maskedEmail}.</p>
           </div>
-        </form>
-      )}
+        ) : (
+          <div>
+            <h2 className="text-2xl font-bold text-chs-charcoal">Verify it's you</h2>
+            <p className="mt-1 text-sm text-gray-500">Choose how to get your 6-digit code.</p>
+            <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-gray-100 p-1" role="tablist">
+              <MethodTab active={method === "TOTP"} icon={<Smartphone size={16} />} label="Authenticator app" onClick={() => pick("TOTP")} />
+              <MethodTab active={method === "EMAIL"} icon={<Mail size={16} />} label="Email code" onClick={() => pick("EMAIL")} />
+            </div>
+            <p className="mt-3 text-sm text-gray-500">
+              {method === "TOTP"
+                ? "Open your authenticator app and enter the code for CHS Employee Portal."
+                : emailSentAt
+                  ? `We sent a code to ${start.maskedEmail}. It expires in 10 minutes.`
+                  : "Sending your code..."}
+            </p>
+          </div>
+        )}
 
-      {view === "choose" && error ? <div className="mt-4 rounded-lg bg-red-50 px-4 py-2.5 text-sm text-red-600">{error}</div> : null}
+        <CodeInput value={code} onChange={setCode} />
+
+        {error ? <div className="rounded-lg bg-red-50 px-4 py-2.5 text-sm text-red-600">{error}</div> : null}
+
+        <button type="submit" disabled={busy || code.length !== 6} className={AUTH_SUBMIT_CLASS}>
+          <ShieldCheck size={16} />
+          {busy ? "Checking..." : enrolling ? "Verify & finish setup" : "Verify"}
+        </button>
+
+        {!enrolling && method === "EMAIL" ? (
+          <div className="text-sm">
+            <button type="button" disabled={busy || resendIn > 0} onClick={sendEmail} className="font-medium text-chs-charcoal hover:underline disabled:text-gray-400 disabled:no-underline">
+              {resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}
+            </button>
+          </div>
+        ) : null}
+      </form>
 
       <p className="mt-6 text-center text-sm">
         <button type="button" onClick={onCancel} className="text-gray-500 hover:underline">
@@ -207,18 +181,19 @@ export function MfaChallenge({
   );
 }
 
-function MethodButton({ icon, title, detail, onClick }: { icon: React.ReactNode; title: string; detail: string; onClick: () => void }) {
+function MethodTab({ active, icon, label, onClick }: { active: boolean; icon: React.ReactNode; label: string; onClick: () => void }) {
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={active}
       onClick={onClick}
-      className="flex w-full items-start gap-3 rounded-xl border border-gray-200 p-4 text-left transition-colors hover:border-chs-gold hover:bg-chs-gold/5"
+      className={`flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+        active ? "bg-white text-chs-charcoal shadow-sm" : "text-gray-500 hover:text-chs-charcoal"
+      }`}
     >
-      <span className="mt-0.5 text-chs-charcoal">{icon}</span>
-      <span>
-        <span className="block text-sm font-semibold text-chs-charcoal">{title}</span>
-        <span className="mt-0.5 block text-xs text-gray-500">{detail}</span>
-      </span>
+      {icon}
+      {label}
     </button>
   );
 }

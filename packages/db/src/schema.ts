@@ -251,6 +251,10 @@ export interface GeneratedPayslipTable {
   leaveUsedDays: Generated<string>;
   workingDaysInPeriod: Generated<number>;
   daysPaid: Generated<string>;
+  baseSalary: Generated<string>;
+  allowances: Generated<string>;
+  unpaidLeaveDays: Generated<string>;
+  deductionNote: string | null;
   currency: Generated<string>;
   status: Generated<E.GeneratedPayslipStatus>;
   version: Generated<number>;

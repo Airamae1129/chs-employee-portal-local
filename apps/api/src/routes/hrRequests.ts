@@ -44,19 +44,6 @@ hrRequestsRouter.post("/", async (req, res) => {
     .returningAll()
     .executeTakeFirstOrThrow();
 
-  if (parsed.data.requestType === "LEAVE" && parsed.data.startDate && parsed.data.endDate) {
-    await db
-      .insertInto("CalendarEntry")
-      .values({
-        userId: req.user!.sub,
-        date: parsed.data.startDate,
-        entryType: "LEAVE",
-        title: `Leave request (${request.status})`,
-        source: "SYSTEM",
-      })
-      .execute();
-  }
-
   await writeAuditLog({ userId: req.user!.sub, action: "HRRequestSubmitted", targetId: request.id });
   res.status(201).json({ request });
 });

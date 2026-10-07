@@ -122,13 +122,14 @@ export default function TimekeepingPage() {
         const day = h.date.slice(0, 10);
         data[day] = { ...data[day], holidays: [...(data[day]?.holidays ?? []), { name: h.name, type: h.type, country: h.country }] };
       }
+      // Every leave request appears on the calendar: approved as "Leave", still-pending as "Leave (pending)".
       for (const l of leave) {
-        let d = new Date(l.startDate);
-        const end = new Date(l.endDate);
+        let d = new Date(`${l.startDate.slice(0, 10)}T00:00:00Z`);
+        const end = new Date(`${l.endDate.slice(0, 10)}T00:00:00Z`);
         while (d <= end) {
           const day = d.toISOString().slice(0, 10);
-          data[day] = { ...data[day], onLeave: true };
-          d.setDate(d.getDate() + 1);
+          data[day] = l.status === "APPROVED" ? { ...data[day], onLeave: true } : { ...data[day], leavePending: true };
+          d = new Date(d.getTime() + 24 * 60 * 60 * 1000);
         }
       }
       for (const e of entries) {
@@ -300,7 +301,7 @@ export default function TimekeepingPage() {
             onNextMonth={() => setMonthDate(new Date(Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth() + 1, 1)))}
           />
           <p className="mt-2 text-xs text-gray-400">
-            Green = hours logged · Red = Ireland holiday · Purple = Philippines holiday · Blue = approved leave · Pink = birthday · Indigo/Amber/Cyan =
+            Green = hours logged · Red = Ireland holiday · Purple = Philippines holiday · Blue = leave (dashed = pending) · Pink = birthday · Indigo/Amber/Cyan =
             assigned task (assigned / in progress / for review) · Gray = your task note. Click a date to add, edit or remove a note.
           </p>
         </div>

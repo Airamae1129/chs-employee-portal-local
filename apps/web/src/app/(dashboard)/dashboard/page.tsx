@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Clock, FileText, CalendarDays, BookOpen, Users, ShieldCheck, Link2, CalendarOff } from "lucide-react";
+import { Clock, FileText, CalendarDays, BookOpen, Users, ShieldCheck, Link2 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { BarChartPanel, BreakdownPanel } from "@/components/ChartPanel";
@@ -26,8 +26,6 @@ export default function DashboardPage() {
   const [pendingRequests, setPendingRequests] = useState(0);
   const [upcomingHolidays, setUpcomingHolidays] = useState(0);
   const [policyCount, setPolicyCount] = useState(0);
-  const [leaveRemaining, setLeaveRemaining] = useState<number | null>(null);
-  const [leaveTotal, setLeaveTotal] = useState<number | null>(null);
   const [clockChart, setClockChart] = useState<{ label: string; value: number }[]>([]);
   const [requestsByType, setRequestsByType] = useState<{ label: string; value: number }[]>([]);
 
@@ -82,13 +80,6 @@ export default function DashboardPage() {
       .then(({ policies }) => setPolicyCount(policies.length))
       .catch(() => void 0);
 
-    apiFetch<{ balance: { remaining: number; total: number } }>("/hr-requests/leave-balance")
-      .then(({ balance }) => {
-        setLeaveRemaining(balance.remaining);
-        setLeaveTotal(balance.total);
-      })
-      .catch(() => void 0);
-
     if (user.role === "MANAGER" || user.role === "ADMIN") {
       apiFetch<{ events: any[]; exceptions: { missingClockOuts: any[] } }>(
         "/time/team?range=" + [daysAgoIso(1), new Date().toISOString()].join(",")
@@ -130,7 +121,6 @@ export default function DashboardPage() {
         <StatCard icon={FileText} value={pendingRequests} label="Pending HR requests" />
         <StatCard icon={CalendarDays} value={upcomingHolidays} label="Upcoming holidays" subtext={user.country === "IRELAND" ? "Ireland" : "Philippines"} />
         <StatCard icon={BookOpen} value={policyCount} label="Policies published" />
-        <StatCard icon={CalendarOff} value={leaveRemaining ?? "—"} label="Paid leave days left" subtext={`of ${leaveTotal ?? 12} this year`} />
 
         {(user.role === "MANAGER" || user.role === "ADMIN") && (
           <>

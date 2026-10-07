@@ -62,16 +62,3 @@ export function countWeekdaysInMonth(year: number, month1to12: number): number {
   }
   return count;
 }
-
-/** All "YYYY-MM-DD" weekday (Mon-Fri) dates in the given month. */
-export function weekdayDatesInMonth(year: number, month1to12: number): string[] {
-  const daysInMonth = new Date(Date.UTC(year, month1to12, 0)).getUTCDate();
-  const dates: string[] = [];
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dow = new Date(Date.UTC(year, month1to12 - 1, d)).getUTCDay();
-    if (dow !== 0 && dow !== 6) {
-      dates.push(`${year}-${String(month1to12).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
-    }
-  }
-  return dates;
-}

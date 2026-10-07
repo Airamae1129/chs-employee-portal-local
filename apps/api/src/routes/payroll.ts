@@ -6,27 +6,21 @@ import { allow } from "../middleware/rbac";
 import { writeAuditLog } from "../utils/audit";
 import { getStorageAdapter } from "../utils/storage";
 import { renderGeneratedPayslip } from "../utils/generatedPayslip";
-import { countWeekdaysInMonth, weekdayDatesInMonth } from "../utils/time";
-import { paidLeaveDayStatusForYear } from "../utils/leave";
+import { countWeekdaysInMonth } from "../utils/time";
 
 /**
- * Payroll revision: real working-days-based calculation, run
- * company-wide (every active employee with a SalaryConfig, any
- * country) instead of Philippines-only, 100% income with no tax,
- * holiday/leave-aware attendance, and a real "Professional Fees" PDF
- * per employee per period. Payroll role only (roles table: Payroll is a
- * separate role from Admin) — it also owns everyone's salary settings.
+ * Payroll — Payroll role only (roles table: Payroll is a separate role
+ * from Admin); it also owns everyone's salary settings.
  *
- * Attendance for each Mon-Fri date in the period, in priority order:
- *   1. Holiday in the employee's own country OR Ireland (company-wide
- *      per the revision) -> paid, no clock-in required.
- *   2. Approved PAID leave, within the first 12 paid-leave weekdays
- *      used in the calendar year -> paid ("Leave Used").
- *   3. Any other approved leave (UNPAID, or PAID beyond the 12-day cap)
- *      -> unpaid, counts as an absence for pay purposes.
- *   4. At least one clock-IN that day -> a full paid day (hours beyond
- *      8/day are logged accurately but never increase pay — "no OT").
- *   5. Otherwise -> absence, that day is not paid.
+ * Payslips carry the fixed monthly salary — there's no attendance- or
+ * hours-based computation. Each payslip records the salary and allowances
+ * it was generated from and the number of working days (Mon-Fri) in the
+ * month, for reference. Unpaid leave is the only deduction, and the
+ * Payroll user calculates and enters it by hand (PATCH /:id/deduction):
+ *
+ *   net pay = monthly salary + allowances - unpaid leave deduction
+ *
+ * A "Professional Fees" PDF is produced per employee per period.
  */
 export const payrollRouter = Router();
 payrollRouter.use(requireAuth, allow("PAYROLL"));
@@ -96,106 +90,28 @@ payrollRouter.put("/salary/:userId", async (req, res) => {
   res.json({ ok: true });
 });
 
-async function unpaidLeaveDatesInRange(employeeId: string, from: string, to: string): Promise<Set<string>> {
-  const requests = await db
-    .selectFrom("HRRequest")
-    .selectAll()
-    .where("employeeId", "=", employeeId)
-    .where("requestType", "=", "LEAVE")
-    .where("status", "=", "APPROVED")
-    .where("payType", "=", "UNPAID")
-    .where("startDate", "<=", to)
-    .where("endDate", ">=", from)
-    .execute();
-  const dates = new Set<string>();
-  for (const r of requests) {
-    if (!r.startDate || !r.endDate) continue;
-    let d = new Date(`${r.startDate}T00:00:00.000Z`);
-    const end = new Date(`${r.endDate}T00:00:00.000Z`);
-    while (d <= end) {
-      dates.add(d.toISOString().slice(0, 10));
-      d = new Date(d.getTime() + 24 * 60 * 60 * 1000);
-    }
-  }
-  return dates;
-}
-
-function computeHours(events: { eventType: string; timestamp: Date | string }[]): number {
-  let total = 0;
-  let lastIn: Date | null = null;
-  for (const e of [...events].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())) {
-    const ts = new Date(e.timestamp);
-    if (e.eventType === "IN") lastIn = ts;
-    else if (e.eventType === "OUT" && lastIn) {
-      total += (ts.getTime() - lastIn.getTime()) / 3_600_000;
-      lastIn = null;
-    }
-  }
-  return total;
-}
-
 const runSchema = z.object({ period: z.string() }); // "YYYY-MM"
 
 payrollRouter.post("/run", async (req, res) => {
   const parsed = runSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: "period is required, e.g. 2026-09" });
+  if (!parsed.success || !/^\d{4}-\d{2}$/.test(parsed.data.period)) {
+    return res.status(400).json({ error: "period is required, e.g. 2026-09" });
+  }
   const { period } = parsed.data;
   const [year, month] = period.split("-").map(Number);
-
-  const periodStart = new Date(Date.UTC(year, month - 1, 1));
-  const periodEnd = new Date(Date.UTC(year, month, 0, 23, 59, 59));
-  const periodStartIso = periodStart.toISOString().slice(0, 10);
-  const periodEndIso = periodEnd.toISOString().slice(0, 10);
-  const weekdays = weekdayDatesInMonth(year, month);
   const workingDaysInPeriod = countWeekdaysInMonth(year, month);
-  const monthLabel = periodStart.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+  const monthLabel = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
 
-  const employees = await db.selectFrom("User").selectAll().where("status", "=", "ACTIVE").execute();
+  const employees = await db.selectFrom("User").select(["id", "name", "country"]).where("status", "=", "ACTIVE").execute();
 
   const created = [];
   for (const emp of employees) {
     const salaryConfig = await db.selectFrom("SalaryConfig").selectAll().where("userId", "=", emp.id).executeTakeFirst();
-    if (!salaryConfig) continue; // can't compute pay without a salary configured
+    if (!salaryConfig) continue; // no salary set yet — nothing to pay
 
-    const [ownCountryHolidays, ieHolidays, events, leaveStatus, unpaidLeaveDates] = await Promise.all([
-      db.selectFrom("Holiday").select("date").where("country", "=", emp.country).where("date", ">=", periodStartIso).where("date", "<=", periodEndIso).execute(),
-      db.selectFrom("Holiday").select("date").where("country", "=", "IRELAND").where("date", ">=", periodStartIso).where("date", "<=", periodEndIso).execute(),
-      db.selectFrom("TimeEvent").selectAll().where("userId", "=", emp.id).where("timestamp", ">=", periodStart).where("timestamp", "<=", periodEnd).execute(),
-      paidLeaveDayStatusForYear(emp.id, year),
-      unpaidLeaveDatesInRange(emp.id, periodStartIso, periodEndIso),
-    ]);
-
-    const holidayDates = new Set([...ownCountryHolidays, ...ieHolidays].map((h) => h.date.slice(0, 10)));
-    const workedDates = new Set<string>();
-    for (const e of events) {
-      if (e.eventType === "IN") workedDates.add(new Date(e.timestamp).toISOString().slice(0, 10));
-    }
-
-    let daysPaid = 0;
-    let holidayDayCount = 0;
-    let leaveUsedDays = 0;
-    for (const date of weekdays) {
-      if (holidayDates.has(date)) {
-        daysPaid += 1;
-        holidayDayCount += 1;
-      } else if (leaveStatus.get(date) === "PAID") {
-        daysPaid += 1;
-        leaveUsedDays += 1;
-      } else if (unpaidLeaveDates.has(date) || leaveStatus.get(date) === "UNPAID") {
-        // unpaid leave or leave beyond the 12-day paid allowance: no pay, not worked either.
-      } else if (workedDates.has(date)) {
-        daysPaid += 1;
-      }
-      // else: absent, no pay for that weekday.
-    }
-
-    const totalWorkHours = Math.round(computeHours(events) * 100) / 100;
-    const dailyRate =
-      salaryConfig.salaryType === "MONTHLY" ? Number(salaryConfig.baseRate) / workingDaysInPeriod : Number(salaryConfig.baseRate) * 8;
-    const holidayPay = Math.round(dailyRate * holidayDayCount * 100) / 100;
-    const grossPay = Math.round((dailyRate * daysPaid + Number(salaryConfig.allowances)) * 100) / 100;
-    const deductions = 0; // revision: "100% income, no tax"
-    const netPay = grossPay - deductions;
+    const baseSalary = Number(salaryConfig.baseRate);
+    const allowances = Number(salaryConfig.allowances);
+    const grossPay = round2(baseSalary + allowances);
     const currency = emp.country === "IRELAND" ? "EUR" : "PHP";
 
     const existing = await db
@@ -204,16 +120,21 @@ payrollRouter.post("/run", async (req, res) => {
       .where("userId", "=", emp.id)
       .where("period", "=", period)
       .executeTakeFirst();
+    // A re-run refreshes the salary but keeps the deduction Payroll entered.
+    const deductions = existing ? Number(existing.deductions) : 0;
 
     const values = {
+      baseSalary: String(baseSalary),
+      allowances: String(allowances),
       grossPay: String(grossPay),
       deductions: String(deductions),
-      netPay: String(netPay),
-      totalWorkHours: String(totalWorkHours),
-      holidayPay: String(holidayPay),
-      leaveUsedDays: String(leaveUsedDays),
+      netPay: String(round2(grossPay - deductions)),
       workingDaysInPeriod,
-      daysPaid: String(daysPaid),
+      daysPaid: String(workingDaysInPeriod),
+      // Attendance-based fields are no longer used for pay.
+      totalWorkHours: "0",
+      holidayPay: "0",
+      leaveUsedDays: "0",
       currency,
     };
 
@@ -234,7 +155,69 @@ payrollRouter.post("/run", async (req, res) => {
   res.status(201).json({ payslips: created });
 });
 
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+const deductionSchema = z.object({
+  unpaidLeaveDays: z.coerce.number().min(0).max(31),
+  amount: z.coerce.number().min(0),
+  note: z.string().trim().max(300).optional(),
+});
+
+/**
+ * PATCH /payroll/:id/deduction — the unpaid-leave deduction, calculated
+ * and entered by the Payroll user. Only before publishing; changing an
+ * approved payslip sends it back to Draft for re-approval. Not on your
+ * own payslip.
+ */
+payrollRouter.patch("/:id/deduction", async (req, res) => {
+  const parsed = deductionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Enter the unpaid leave days and the deduction amount (0 or more)" });
+  const existing = await db.selectFrom("GeneratedPayslip").selectAll().where("id", "=", req.params.id).executeTakeFirst();
+  if (!existing) return res.status(404).json({ error: "Payslip not found" });
+  if (existing.userId === req.user!.sub) {
+    return res.status(403).json({ error: "You can't adjust your own payslip — another Payroll user has to." });
+  }
+  if (existing.status === "PUBLISHED") {
+    return res.status(400).json({ error: "This payslip is already published. Re-run payroll for the period to change it." });
+  }
+  const gross = Number(existing.grossPay);
+  if (parsed.data.amount > gross) return res.status(400).json({ error: "The deduction can't be more than the gross pay" });
+
+  const payslip = await db
+    .updateTable("GeneratedPayslip")
+    .set({
+      unpaidLeaveDays: String(parsed.data.unpaidLeaveDays),
+      deductions: String(round2(parsed.data.amount)),
+      netPay: String(round2(gross - parsed.data.amount)),
+      deductionNote: parsed.data.note || null,
+      status: "DRAFT",
+    })
+    .where("id", "=", existing.id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+  await writeAuditLog({
+    userId: req.user!.sub,
+    action: "PayrollDeductionSet",
+    targetId: payslip.id,
+    metadata: {
+      forUserId: existing.userId,
+      period: existing.period,
+      from: { unpaidLeaveDays: existing.unpaidLeaveDays, amount: existing.deductions },
+      to: { unpaidLeaveDays: payslip.unpaidLeaveDays, amount: payslip.deductions },
+      note: payslip.deductionNote,
+    },
+  });
+  res.json({ payslip });
+});
+
 payrollRouter.patch("/:id/approve", async (req, res) => {
+  const existing = await db.selectFrom("GeneratedPayslip").select(["userId"]).where("id", "=", req.params.id).executeTakeFirst();
+  if (!existing) return res.status(404).json({ error: "Payslip not found" });
+  if (existing.userId === req.user!.sub) {
+    return res.status(403).json({ error: "You can't approve your own payslip — another Payroll user has to." });
+  }
   const payslip = await db.updateTable("GeneratedPayslip").set({ status: "APPROVED" }).where("id", "=", req.params.id).returningAll().executeTakeFirstOrThrow();
   await writeAuditLog({ userId: req.user!.sub, action: "PayrollApproved", targetId: payslip.id });
   res.json({ payslip });

@@ -13,9 +13,14 @@ export interface PayslipPdfInput {
   employeeName: string;
   email: string;
   monthLabel: string; // e.g. "May 2026"
-  totalWorkHours: number;
-  holidayPay: number;
-  leaveUsedDays: number;
+  workingDays: number; // Mon-Fri days in the month, for reference
+  monthlySalary: number; // fixed — no attendance-based computation
+  allowances: number;
+  unpaidLeaveDays: number;
+  unpaidLeaveDeduction: number; // calculated and entered by Payroll
+  deductionNote: string | null;
+  /** Set for payslips generated before fixed salaries (no stored salary): shown as "Gross Pay". */
+  legacyGrossPay: number | null;
   netPay: number;
   currencySymbol: string; // "₱" or "€"
 }
@@ -104,10 +109,20 @@ export async function renderPayslipPdf(input: PayslipPdfInput): Promise<Buffer> 
 
   y -= 20;
   sectionHeader("Pay Summary");
-  row("Total Work Hours", input.totalWorkHours.toFixed(1));
-  row("Holiday Pay", `${input.currencySymbol}${input.holidayPay.toLocaleString(undefined, { maximumFractionDigits: 2 })}`);
-  row("Leave Used", `${input.leaveUsedDays} day(s)`);
-  row("Net Pay", `${input.currencySymbol}${input.netPay.toLocaleString(undefined, { maximumFractionDigits: 2 })}`);
+  const money = (n: number) => `${input.currencySymbol}${n.toLocaleString("en-IE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  row("Working Days in Month", String(input.workingDays));
+  if (input.legacyGrossPay !== null) {
+    row("Gross Pay", money(input.legacyGrossPay));
+  } else {
+    row("Monthly Salary", money(input.monthlySalary));
+    if (input.allowances > 0) row("Allowances", money(input.allowances));
+  }
+  if (input.unpaidLeaveDeduction > 0 || input.unpaidLeaveDays > 0) {
+    const days = `${input.unpaidLeaveDays} day${input.unpaidLeaveDays === 1 ? "" : "s"}`;
+    row("Unpaid Leave Deduction", `- ${money(input.unpaidLeaveDeduction)} (${days})`);
+    if (input.deductionNote) row("Deduction Note", input.deductionNote.length > 48 ? `${input.deductionNote.slice(0, 47)}...` : input.deductionNote);
+  }
+  row("Net Pay", money(input.netPay));
 
   y -= 20;
   sectionHeader("Authorization");

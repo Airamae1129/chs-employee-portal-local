@@ -4,6 +4,8 @@ export interface DayCellData {
   hours?: number;
   holidays?: { name: string; type: string; country: "IRELAND" | "PHILIPPINES" }[];
   onLeave?: boolean;
+  /** A leave request on this day that's still waiting for approval. */
+  leavePending?: boolean;
   notes?: { id: string; title: string }[];
   birthdays?: { id: string; name: string }[];
   tasks?: { id: string; subject: string; status: "ASSIGNED" | "IN_PROGRESS" | "FOR_REVIEW" | "DONE" }[];
@@ -108,6 +110,8 @@ export function CalendarGrid({
                 ))}
                 {data?.onLeave ? (
                   <div className="truncate rounded bg-blue-50 px-1 py-0.5 text-[10px] text-blue-600">Leave</div>
+                ) : data?.leavePending ? (
+                  <div className="truncate rounded border border-dashed border-blue-300 px-1 py-0.5 text-[10px] text-blue-500">Leave (pending)</div>
                 ) : null}
                 {typeof data?.hours === "number" && data.hours > 0 ? (
                   <div className="truncate rounded bg-green-50 px-1 py-0.5 text-[10px] text-green-700">

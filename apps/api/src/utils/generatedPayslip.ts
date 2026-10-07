@@ -10,9 +10,13 @@ import { renderPayslipPdf } from "./payslipPdf";
 export async function renderGeneratedPayslip(payslip: {
   userId: string;
   period: string;
-  totalWorkHours: string | number;
-  holidayPay: string | number;
-  leaveUsedDays: string | number;
+  workingDaysInPeriod: number;
+  baseSalary: string | number;
+  allowances: string | number;
+  unpaidLeaveDays: string | number;
+  deductions: string | number;
+  deductionNote: string | null;
+  grossPay: string | number;
   netPay: string | number;
   currency: string;
 }): Promise<Buffer | null> {
@@ -26,9 +30,14 @@ export async function renderGeneratedPayslip(payslip: {
     employeeName: employee.name,
     email: employee.email,
     monthLabel,
-    totalWorkHours: Number(payslip.totalWorkHours),
-    holidayPay: Number(payslip.holidayPay),
-    leaveUsedDays: Number(payslip.leaveUsedDays),
+    workingDays: payslip.workingDaysInPeriod,
+    monthlySalary: Number(payslip.baseSalary),
+    allowances: Number(payslip.allowances),
+    unpaidLeaveDays: Number(payslip.unpaidLeaveDays),
+    unpaidLeaveDeduction: Number(payslip.deductions),
+    deductionNote: payslip.deductionNote,
+    // Payslips generated before fixed salaries have no stored salary; show their gross instead.
+    legacyGrossPay: Number(payslip.baseSalary) === 0 && Number(payslip.grossPay) > 0 ? Number(payslip.grossPay) : null,
     netPay: Number(payslip.netPay),
     // pdf-lib's standard WinAnsi-encoded fonts can't render "₱" (only
     // Latin-1/WinAnsi glyphs are available without embedding a custom

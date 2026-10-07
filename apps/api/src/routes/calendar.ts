@@ -42,8 +42,9 @@ calendarRouter.get("/birthdays", async (_req, res) => {
 
 /**
  * GET /calendar/me?month=YYYY-MM — merged view per Section 5/6: the
- * user's own TimeEvents rolled up per day, approved Leave, their
- * country's Holidays, and their own TaskNotes.
+ * user's own TimeEvents rolled up per day, their leave requests (pending
+ * and approved, across every date they cover), their country's Holidays,
+ * and their own TaskNotes.
  */
 calendarRouter.get("/me", async (req, res) => {
   const { start, end } = monthRange(req.query.month as string | undefined);
@@ -64,12 +65,13 @@ calendarRouter.get("/me", async (req, res) => {
       .selectAll()
       .where("employeeId", "=", userId)
       .where("requestType", "=", "LEAVE")
-      .where("status", "=", "APPROVED")
+      .where("status", "in", ["SUBMITTED", "APPROVED"])
       .where("startDate", "<=", endD)
       .where("endDate", ">=", startD)
       .execute(),
     db.selectFrom("Holiday").selectAll().where("country", "in", holidayCountries as ("IRELAND" | "PHILIPPINES")[]).where("date", ">=", startD).where("date", "<=", endD).execute(),
-    db.selectFrom("CalendarEntry").selectAll().where("userId", "=", userId).where("date", ">=", startD).where("date", "<=", endD).execute(),
+    // Older leave requests left a placeholder "LEAVE" entry; the request itself is shown now.
+    db.selectFrom("CalendarEntry").selectAll().where("userId", "=", userId).where("entryType", "!=", "LEAVE").where("date", ">=", startD).where("date", "<=", endD).execute(),
   ]);
 
   res.json({ timeEvents, leave, holidays, entries });

@@ -20,12 +20,9 @@ retry/backoff, audit-logged on failure), staff account management, and the
 audit log.
 
 **Scaffolded, functionally wired, ready to extend** (Phase 2–3): team
-availability/resourcing (`ResourceAllocation`), the Philippines payroll
-engine (locks a period's time entries, computes gross/deductions/net from
-`SalaryConfig`, Draft → Approved → Published), and Ireland payslip upload.
-The generated payslip PDF is a plaintext placeholder — swap in a real
-template (see the `pdf` skill, or `pdf-lib`) before using this for real
-payroll. Microsoft Graph free/busy and Entra ID SSO itself are stubbed with
+availability/resourcing (`ResourceAllocation`), payroll (fixed monthly
+salary per payslip — see "Payroll" below — Draft → Approved → Published,
+with a "Professional Fees" PDF), and Ireland payslip upload. Microsoft Graph free/busy and Entra ID SSO itself are stubbed with
 clear `TODO`s (see below) rather than faked, since they need a real Azure
 tenant to implement against.
 
@@ -132,6 +129,18 @@ than the Admin). Rules, all enforced on the server:
 
 Review roles whenever staff join, move or leave. No shared accounts.
 
+### Payroll
+
+Payslips carry each person's **fixed monthly salary** (set by Payroll on
+the Payroll page) — there's no attendance- or hours-based computation.
+Each payslip also shows the number of working days (Mon-Fri) in the
+month for reference. Unpaid leave is the only deduction: the Payroll user
+calculates it and enters the days, amount and a note on the payslip
+before approving. Net pay = monthly salary + allowances − deduction.
+
+Leave requests appear on the requester's calendar (dashed while pending,
+solid once approved); leave credits aren't shown on the dashboard.
+
 ### Sign-in MFA and password reset
 
 Every sign-in has two steps: password, then a 6-digit code. Every
@@ -168,12 +177,8 @@ in `.env` when a real bucket is provisioned. No route code changes.
 - Rotate `JWT_SECRET` and every seeded password immediately.
 - Put this behind HTTPS and set `secure: true` on the session cookie
   (already conditional on `NODE_ENV=production`).
-- The Philippines payroll deduction calculation
-  (`apps/api/src/routes/payroll.ts`) is a flat 12% placeholder — replace with
-  real statutory deduction tables (SSS/PhilHealth/Pag-IBIG/withholding tax)
-  before running real payroll.
-- The generated payslip PDF is a plaintext stand-in — replace with a real
-  template before publishing to employees.
+- Payroll applies no tax or statutory deductions (SSS/PhilHealth/Pag-IBIG/
+  withholding) — add them before using it where those apply.
 - Review `apps/api/src/middleware/rbac.ts` and every route's use of
   `allow(...)` / `ownershipOrElevated(...)` against your actual compliance
   requirements — this scaffold implements Section 3/9 of the build prompt as
